@@ -1,9 +1,10 @@
 namespace Tedd.Smb;
 
-// MS-SMB2 offsets, in bytes. Header offsets start at the SMB2 protocol identifier.
-// Request/response offsets start at the command body, excluding the SMB2 header.
+// SMB 3.1.1 retains the SMB2 packet format defined by MS-SMB2.
+// Offsets are in bytes; header offsets start at the protocol identifier.
+// Request/response offsets start at the command body, excluding the header.
 // StructureSize is the wire field value; FixedSize excludes any variable buffer.
-internal static class Smb2Header
+internal static class Smb3Header
 {
     internal const int Size = 64;
     internal const int ProtocolIdOffset = 0;
@@ -25,7 +26,7 @@ internal static class Smb2Header
 }
 
 // Authentication covers AssociatedData; the signature contains the AEAD tag.
-internal static class Smb2TransformHeader
+internal static class Smb3TransformHeader
 {
     internal const int Size = 52;
     internal const int ProtocolIdOffset = 0;
@@ -55,7 +56,7 @@ internal static class Smb1NegotiateEnvelope
     internal const byte NegotiateCommand = 0x72;
 }
 
-internal static class Smb2NegotiateRequest
+internal static class Smb3NegotiateRequest
 {
     internal const int FixedSize = 36;
     internal const int StructureSize = 36;
@@ -68,7 +69,7 @@ internal static class Smb2NegotiateRequest
     internal const int DialectsOffset = 36;
 }
 
-internal static class Smb2NegotiateResponse
+internal static class Smb3NegotiateResponse
 {
     internal const int FixedSize = 64;
     internal const int StructureSize = 65;
@@ -86,27 +87,27 @@ internal static class Smb2NegotiateResponse
     internal const int NegotiateContextOffsetFieldOffset = 60;
 }
 
-internal static class Smb2NegotiateContext
+internal static class Smb3NegotiateContext
 {
     internal const int HeaderSize = 8;
     internal const int ContextTypeOffset = 0;
     internal const int DataLengthOffset = 2;
 }
 
-internal static class Smb2PreauthIntegrityCapabilities
+internal static class Smb3PreauthIntegrityCapabilities
 {
     internal const int HashAlgorithmCountOffset = 0;
     internal const int SaltLengthOffset = 2;
     internal const int HashAlgorithmsOffset = 4;
 }
 
-internal static class Smb2AlgorithmCapabilities
+internal static class Smb3AlgorithmCapabilities
 {
     internal const int AlgorithmCountOffset = 0;
     internal const int AlgorithmsOffset = 2;
 }
 
-internal static class Smb2SessionSetupRequest
+internal static class Smb3SessionSetupRequest
 {
     internal const int FixedSize = 24;
     internal const int StructureSize = 25;
@@ -117,7 +118,7 @@ internal static class Smb2SessionSetupRequest
     internal const int PreviousSessionIdOffset = 16;
 }
 
-internal static class Smb2SessionSetupResponse
+internal static class Smb3SessionSetupResponse
 {
     internal const int FixedSize = 8;
     internal const int StructureSize = 9;
@@ -126,7 +127,7 @@ internal static class Smb2SessionSetupResponse
     internal const int SecurityBufferLengthOffset = 6;
 }
 
-internal static class Smb2TreeConnectRequest
+internal static class Smb3TreeConnectRequest
 {
     internal const int FixedSize = 8;
     internal const int StructureSize = 9;
@@ -134,7 +135,7 @@ internal static class Smb2TreeConnectRequest
     internal const int PathLengthOffset = 6;
 }
 
-internal static class Smb2TreeConnectResponse
+internal static class Smb3TreeConnectResponse
 {
     internal const int FixedSize = 16;
     internal const int StructureSize = 16;
@@ -143,7 +144,7 @@ internal static class Smb2TreeConnectResponse
     internal const int MaximalAccessOffset = 12;
 }
 
-internal static class Smb2CreateRequest
+internal static class Smb3CreateRequest
 {
     internal const int FixedSize = 56;
     internal const int StructureSize = 57;
@@ -159,7 +160,7 @@ internal static class Smb2CreateRequest
     internal const int CreateContextsLengthOffset = 52;
 }
 
-internal static class Smb2CreateResponse
+internal static class Smb3CreateResponse
 {
     internal const int FixedSize = 88;
     internal const int StructureSize = 89;
@@ -172,7 +173,7 @@ internal static class Smb2CreateResponse
 }
 
 // Next is relative to this context; name/data offsets are also context-relative.
-internal static class Smb2CreateContext
+internal static class Smb3CreateContext
 {
     internal const int HeaderSize = 16;
     internal const int NextOffset = 0;
@@ -185,13 +186,13 @@ internal static class Smb2CreateContext
     internal const int TagSize = 4;
 }
 
-internal static class Smb2QueryMaximalAccessResponse
+internal static class Smb3QueryMaximalAccessResponse
 {
     internal const int Size = 8;
     internal const int MaximalAccessOffset = 4;
 }
 
-internal static class Smb2QueryOnDiskIdResponse
+internal static class Smb3QueryOnDiskIdResponse
 {
     internal const int Size = 32;
     internal const int DiskFileIdOffset = 0;
@@ -199,7 +200,7 @@ internal static class Smb2QueryOnDiskIdResponse
     internal const int IdentifierSize = 8;
 }
 
-internal static class Smb2CloseRequest
+internal static class Smb3CloseRequest
 {
     internal const int FixedSize = 24;
     internal const int StructureSize = 24;
@@ -207,7 +208,7 @@ internal static class Smb2CloseRequest
     internal const int FileIdOffset = 8;
 }
 
-internal static class Smb2CloseResponse
+internal static class Smb3CloseResponse
 {
     internal const int FixedSize = 60;
     internal const int StructureSize = 60;
@@ -215,14 +216,14 @@ internal static class Smb2CloseResponse
     internal const int CreationTimeOffset = 8;
 }
 
-internal static class Smb2FlushRequest
+internal static class Smb3FlushRequest
 {
     internal const int FixedSize = 24;
     internal const int StructureSize = 24;
     internal const int FileIdOffset = 8;
 }
 
-internal static class Smb2ReadRequest
+internal static class Smb3ReadRequest
 {
     internal const int FixedSize = 48;
     internal const int StructureSize = 49;
@@ -234,7 +235,7 @@ internal static class Smb2ReadRequest
     internal const int ReadChannelInfoLengthOffset = 46;
 }
 
-internal static class Smb2ReadResponse
+internal static class Smb3ReadResponse
 {
     internal const int FixedSize = 16;
     internal const int StructureSize = 17;
@@ -242,7 +243,7 @@ internal static class Smb2ReadResponse
     internal const int DataLengthOffset = 4;
 }
 
-internal static class Smb2WriteRequest
+internal static class Smb3WriteRequest
 {
     internal const int FixedSize = 48;
     internal const int StructureSize = 49;
@@ -255,14 +256,14 @@ internal static class Smb2WriteRequest
     internal const int FlagsOffset = 44;
 }
 
-internal static class Smb2WriteResponse
+internal static class Smb3WriteResponse
 {
     internal const int FixedSize = 16;
     internal const int StructureSize = 17;
     internal const int CountOffset = 4;
 }
 
-internal static class Smb2IoctlRequest
+internal static class Smb3IoctlRequest
 {
     internal const int FixedSize = 56;
     internal const int StructureSize = 57;
@@ -273,7 +274,7 @@ internal static class Smb2IoctlRequest
     internal const int MaxOutputResponseOffset = 44;
 }
 
-internal static class Smb2IoctlResponse
+internal static class Smb3IoctlResponse
 {
     internal const int FixedSize = 48;
     internal const int StructureSize = 49;
@@ -283,7 +284,7 @@ internal static class Smb2IoctlResponse
     internal const int OutputCountOffset = 36;
 }
 
-internal static class Smb2QueryDirectoryRequest
+internal static class Smb3QueryDirectoryRequest
 {
     internal const int FixedSize = 32;
     internal const int StructureSize = 33;
@@ -295,7 +296,7 @@ internal static class Smb2QueryDirectoryRequest
     internal const int OutputBufferLengthOffset = 28;
 }
 
-internal static class Smb2QueryInfoRequest
+internal static class Smb3QueryInfoRequest
 {
     internal const int FixedSize = 40;
     internal const int StructureSize = 41;
@@ -308,7 +309,7 @@ internal static class Smb2QueryInfoRequest
 }
 
 // QUERY_INFO and QUERY_DIRECTORY responses share this buffer descriptor layout.
-internal static class Smb2QueryResponse
+internal static class Smb3QueryResponse
 {
     internal const int FixedSize = 8;
     internal const int StructureSize = 9;
@@ -316,7 +317,7 @@ internal static class Smb2QueryResponse
     internal const int OutputBufferLengthOffset = 4;
 }
 
-internal static class Smb2SetInfoRequest
+internal static class Smb3SetInfoRequest
 {
     internal const int FixedSize = 32;
     internal const int StructureSize = 33;
@@ -327,20 +328,20 @@ internal static class Smb2SetInfoRequest
     internal const int FileIdOffset = 16;
 }
 
-internal static class Smb2SetInfoResponse
+internal static class Smb3SetInfoResponse
 {
     internal const int FixedSize = 2;
     internal const int StructureSize = 2;
 }
 
 // LOGOFF/TREE_DISCONNECT/ECHO messages, CANCEL requests and FLUSH responses share this layout.
-internal static class Smb2SimpleMessage
+internal static class Smb3SimpleMessage
 {
     internal const int FixedSize = 4;
     internal const int StructureSize = 4;
 }
 
-internal static class Smb2ErrorResponse
+internal static class Smb3ErrorResponse
 {
     internal const int MinimumSize = 9;
     internal const int StructureSize = 9;
@@ -354,6 +355,9 @@ internal static class Smb3Cryptography
     internal const int GcmNonceSize = 12;
     internal const int CcmNonceSize = 11;
     internal const int NonceCounterSize = sizeof(ulong);
+    // Exact, case-sensitive SMB 3.1.1 KDF labels (MS-SMB2 3.2.5.3.1).
+    // C2S means client-to-server; S2C means server-to-client. Neither names a dialect.
+    // Crypto.Kdf appends the protocol-required terminating NUL; these values must not change.
     internal const string SigningKeyLabel = "SMBSigningKey";
     internal const string ServerToClientCipherKeyLabel = "SMBS2CCipherKey";
     internal const string ClientToServerCipherKeyLabel = "SMBC2SCipherKey";

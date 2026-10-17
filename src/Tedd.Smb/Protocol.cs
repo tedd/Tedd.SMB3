@@ -65,42 +65,42 @@ internal static class Wire
 
     internal static byte[] Header(ushort command, ulong message, ulong session = 0, uint tree = 0)
     {
-        var b = new byte[Smb2Header.Size];
+        var b = new byte[Smb3Header.Size];
         WriteHeader(b, command, message, session, tree);
         return b;
     }
 
     internal static byte[] Packet(ushort command, ulong message, ulong session, uint tree, ReadOnlySpan<byte> body)
     {
-        var packet = new byte[checked(Smb2Header.Size + body.Length)];
+        var packet = new byte[checked(Smb3Header.Size + body.Length)];
         WriteHeader(packet, command, message, session, tree);
-        body.CopyTo(packet.AsSpan(Smb2Header.Size));
+        body.CopyTo(packet.AsSpan(Smb3Header.Size));
         return packet;
     }
 
     private static void WriteHeader(Span<byte> b, ushort command, ulong message, ulong session, uint tree)
     {
-        WriteUInt32LittleEndian(b, Smb2Header.ProtocolIdOffset, Smb2Header.ProtocolId);
-        WriteUInt16LittleEndian(b, Smb2Header.StructureSizeOffset, Smb2Header.Size);
-        WriteUInt16LittleEndian(b, Smb2Header.CreditChargeOffset, 1);
-        WriteUInt16LittleEndian(b, Smb2Header.CommandOffset, command);
-        WriteUInt16LittleEndian(b, Smb2Header.CreditsOffset, SmbLimits.MaxCredits);
-        WriteUInt64LittleEndian(b, Smb2Header.MessageIdOffset, message);
-        WriteUInt32LittleEndian(b, Smb2Header.ProcessIdOffset, SmbLimits.DefaultProcessId);
-        WriteUInt32LittleEndian(b, Smb2Header.TreeIdOffset, tree);
-        WriteUInt64LittleEndian(b, Smb2Header.SessionIdOffset, session);
+        WriteUInt32LittleEndian(b, Smb3Header.ProtocolIdOffset, Smb3Header.ProtocolId);
+        WriteUInt16LittleEndian(b, Smb3Header.StructureSizeOffset, Smb3Header.Size);
+        WriteUInt16LittleEndian(b, Smb3Header.CreditChargeOffset, 1);
+        WriteUInt16LittleEndian(b, Smb3Header.CommandOffset, command);
+        WriteUInt16LittleEndian(b, Smb3Header.CreditsOffset, SmbLimits.MaxCredits);
+        WriteUInt64LittleEndian(b, Smb3Header.MessageIdOffset, message);
+        WriteUInt32LittleEndian(b, Smb3Header.ProcessIdOffset, SmbLimits.DefaultProcessId);
+        WriteUInt32LittleEndian(b, Smb3Header.TreeIdOffset, tree);
+        WriteUInt64LittleEndian(b, Smb3Header.SessionIdOffset, session);
     }
 
     internal static byte[] CreateSimpleMessage()
     {
-        var body = new byte[Smb2SimpleMessage.FixedSize];
-        WriteUInt16LittleEndian(body, 0, Smb2SimpleMessage.StructureSize);
+        var body = new byte[Smb3SimpleMessage.FixedSize];
+        WriteUInt16LittleEndian(body, 0, Smb3SimpleMessage.StructureSize);
         return body;
     }
 
     internal static void Validate(ReadOnlySpan<byte> b)
     {
-        if (b.Length < Smb2Header.Size || ReadUInt32LittleEndian(b, Smb2Header.ProtocolIdOffset) != Smb2Header.ProtocolId || ReadUInt16LittleEndian(b, Smb2Header.StructureSizeOffset) != Smb2Header.Size)
+        if (b.Length < Smb3Header.Size || ReadUInt32LittleEndian(b, Smb3Header.ProtocolIdOffset) != Smb3Header.ProtocolId || ReadUInt16LittleEndian(b, Smb3Header.StructureSizeOffset) != Smb3Header.Size)
             throw new SmbException(NtStatus.InvalidParameter);
     }
 }

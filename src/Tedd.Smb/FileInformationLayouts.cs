@@ -1,6 +1,6 @@
 namespace Tedd.Smb;
 
-// MS-FSCC information buffers. Offsets start at the information buffer, not the SMB2 header.
+// MS-FSCC information buffers. Offsets start at the information buffer, not the SMB3 packet header.
 internal static class FileBasicInformation
 {
     internal const int Size = 40;
@@ -166,7 +166,7 @@ internal static class FileFsSectorSizeInformation
     internal const uint PartitionAlignedOnDevice = 0x00000002;
 }
 
-internal static class Smb2FileId
+internal static class Smb3FileId
 {
     internal const int Size = 16;
     internal const byte RelatedOperationByte = 0xff;

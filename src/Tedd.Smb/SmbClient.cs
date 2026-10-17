@@ -73,45 +73,45 @@ public sealed class SmbClient : IAsyncDisposable
         await tcp.ConnectAsync(host, options.Port, ct).ConfigureAwait(false);
         tcp.NoDelay = true;
         transport = new SmbTransport(tcp.GetStream());
-        var body = new byte[Wire.Align(Smb2NegotiateRequest.FixedSize + sizeof(ushort))];
-        Wire.WriteUInt16LittleEndian(body, 0, Smb2NegotiateRequest.StructureSize);
-        Wire.WriteUInt16LittleEndian(body, Smb2NegotiateRequest.DialectCountOffset, 1);
-        Wire.WriteUInt16LittleEndian(body, Smb2NegotiateRequest.SecurityModeOffset, Smb2SecurityMode.SigningEnabledAndRequired);
-        Wire.WriteUInt32LittleEndian(body, Smb2NegotiateRequest.CapabilitiesOffset, Smb2GlobalCapabilities.Encryption);
-        Guid.NewGuid().TryWriteBytes(body.AsSpan(Smb2NegotiateRequest.ClientGuidOffset, 16));
-        Wire.WriteUInt32LittleEndian(body, Smb2NegotiateRequest.NegotiateContextOffsetFieldOffset, (uint)(Smb2Header.Size + body.Length));
-        Wire.WriteUInt16LittleEndian(body, Smb2NegotiateRequest.NegotiateContextCountOffset, Negotiation.ContextCountWithSigning);
-        Wire.WriteUInt16LittleEndian(body, Smb2NegotiateRequest.DialectsOffset, Smb2Dialect.Smb311);
-        var negotiate = CreateRequest(Smb2Command.Negotiate, Wire.Join(body, Negotiation.Contexts(offerBoth: true)));
+        var body = new byte[Wire.Align(Smb3NegotiateRequest.FixedSize + sizeof(ushort))];
+        Wire.WriteUInt16LittleEndian(body, 0, Smb3NegotiateRequest.StructureSize);
+        Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.DialectCountOffset, 1);
+        Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.SecurityModeOffset, Smb3SecurityMode.SigningEnabledAndRequired);
+        Wire.WriteUInt32LittleEndian(body, Smb3NegotiateRequest.CapabilitiesOffset, Smb3GlobalCapabilities.Encryption);
+        Guid.NewGuid().TryWriteBytes(body.AsSpan(Smb3NegotiateRequest.ClientGuidOffset, 16));
+        Wire.WriteUInt32LittleEndian(body, Smb3NegotiateRequest.NegotiateContextOffsetFieldOffset, (uint)(Smb3Header.Size + body.Length));
+        Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.NegotiateContextCountOffset, Negotiation.ContextCountWithSigning);
+        Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.DialectsOffset, Smb3Dialect.Smb311);
+        var negotiate = CreateRequest(Smb3Command.Negotiate, Wire.Join(body, Negotiation.Contexts(offerBoth: true)));
         var response = await ExchangeUnauthenticatedAsync(negotiate, ct).ConfigureAwait(false);
         ThrowIfFailed(response);
-        if (response.Length < Smb2Header.Size + Smb2NegotiateResponse.FixedSize || Wire.ReadUInt16LittleEndian(response, Smb2Header.Size) != Smb2NegotiateResponse.StructureSize || Wire.ReadUInt16LittleEndian(response, Smb2Header.Size + Smb2NegotiateResponse.DialectRevisionOffset) != Smb2Dialect.Smb311 || (Wire.ReadUInt16LittleEndian(response, Smb2Header.Size + Smb2NegotiateResponse.SecurityModeOffset) & Smb2SecurityMode.SigningEnabled) == 0)
+        if (response.Length < Smb3Header.Size + Smb3NegotiateResponse.FixedSize || Wire.ReadUInt16LittleEndian(response, Smb3Header.Size) != Smb3NegotiateResponse.StructureSize || Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.DialectRevisionOffset) != Smb3Dialect.Smb311 || (Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.SecurityModeOffset) & Smb3SecurityMode.SigningEnabled) == 0)
             throw new SmbException(NtStatus.NotSupported);
-        var algorithms = Negotiation.ValidateContexts(response, checked((int)Wire.ReadUInt32LittleEndian(response, Smb2Header.Size + Smb2NegotiateResponse.NegotiateContextOffsetFieldOffset)), Wire.ReadUInt16LittleEndian(response, Smb2Header.Size + Smb2NegotiateResponse.NegotiateContextCountOffset), true);
+        var algorithms = Negotiation.ValidateContexts(response, checked((int)Wire.ReadUInt32LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.NegotiateContextOffsetFieldOffset)), Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.NegotiateContextCountOffset), true);
         byte[] hash = Negotiation.Hash(Negotiation.Hash(new byte[Smb3Cryptography.PreauthHashSize], negotiate), response);
         var ntlm = Ntlm.Negotiate();
-        var setup = CreateRequest(Smb2Command.SessionSetup, CreateSessionSetupBody(ntlm));
+        var setup = CreateRequest(Smb3Command.SessionSetup, CreateSessionSetupBody(ntlm));
         hash = Negotiation.Hash(hash, setup);
         response = await ExchangeUnauthenticatedAsync(setup, ct).ConfigureAwait(false);
-        if (Wire.ReadUInt32LittleEndian(response, Smb2Header.StatusOffset) != NtStatus.MoreProcessingRequired || response.Length < Smb2Header.Size + Smb2SessionSetupResponse.FixedSize || Wire.ReadUInt16LittleEndian(response, Smb2Header.Size) != Smb2SessionSetupResponse.StructureSize)
-            throw new SmbException(Wire.ReadUInt32LittleEndian(response, Smb2Header.StatusOffset));
-        session = Wire.ReadUInt64LittleEndian(response, Smb2Header.SessionIdOffset);
+        if (Wire.ReadUInt32LittleEndian(response, Smb3Header.StatusOffset) != NtStatus.MoreProcessingRequired || response.Length < Smb3Header.Size + Smb3SessionSetupResponse.FixedSize || Wire.ReadUInt16LittleEndian(response, Smb3Header.Size) != Smb3SessionSetupResponse.StructureSize)
+            throw new SmbException(Wire.ReadUInt32LittleEndian(response, Smb3Header.StatusOffset));
+        session = Wire.ReadUInt64LittleEndian(response, Smb3Header.SessionIdOffset);
         if (session == 0)
             throw new SmbException(NtStatus.LogonFailure);
         hash = Negotiation.Hash(hash, response);
-        var challenge = Spnego.Unwrap(Wire.Slice(response, Wire.ReadUInt16LittleEndian(response, Smb2Header.Size + Smb2SessionSetupResponse.SecurityBufferOffsetFieldOffset), Wire.ReadUInt16LittleEndian(response, Smb2Header.Size + Smb2SessionSetupResponse.SecurityBufferLengthOffset)).ToArray());
+        var challenge = Spnego.Unwrap(Wire.Slice(response, Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3SessionSetupResponse.SecurityBufferOffsetFieldOffset), Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3SessionSetupResponse.SecurityBufferLengthOffset)).ToArray());
         var (token, key) = Ntlm.Authenticate(ntlm, challenge, options.UserName, options.Password, options.Domain);
         try
         {
-            setup = CreateRequest(Smb2Command.SessionSetup, CreateSessionSetupBody(token));
+            setup = CreateRequest(Smb3Command.SessionSetup, CreateSessionSetupBody(token));
             hash = Negotiation.Hash(hash, setup);
             response = await ExchangeUnauthenticatedAsync(setup, ct).ConfigureAwait(false);
             ThrowIfFailed(response);
-            if (response.Length < Smb2Header.Size + Smb2SessionSetupResponse.FixedSize || Wire.ReadUInt16LittleEndian(response, Smb2Header.Size) != Smb2SessionSetupResponse.StructureSize || Wire.ReadUInt64LittleEndian(response, Smb2Header.SessionIdOffset) != session || (Wire.ReadUInt16LittleEndian(response, Smb2Header.Size + Smb2SessionSetupResponse.SessionFlagsOffset) & (Smb2SessionFlags.IsGuest | Smb2SessionFlags.IsNull)) != 0)
+            if (response.Length < Smb3Header.Size + Smb3SessionSetupResponse.FixedSize || Wire.ReadUInt16LittleEndian(response, Smb3Header.Size) != Smb3SessionSetupResponse.StructureSize || Wire.ReadUInt64LittleEndian(response, Smb3Header.SessionIdOffset) != session || (Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3SessionSetupResponse.SessionFlagsOffset) & (Smb3SessionFlags.IsGuest | Smb3SessionFlags.IsNull)) != 0)
                 throw new SmbException(NtStatus.LogonFailure);
             crypto = new SessionCrypto(key, hash, false, algorithms.Cipher);
             crypto.Verify(response);
-            encrypted = options.Encrypt || (Wire.ReadUInt16LittleEndian(response, Smb2Header.Size + Smb2SessionSetupResponse.SessionFlagsOffset) & Smb2SessionFlags.EncryptData) != 0;
+            encrypted = options.Encrypt || (Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3SessionSetupResponse.SessionFlagsOffset) & Smb3SessionFlags.EncryptData) != 0;
         }
         finally
         {
@@ -119,24 +119,24 @@ public sealed class SmbClient : IAsyncDisposable
         }
 
         var path = Encoding.Unicode.GetBytes($"\\\\{host}\\{share}");
-        body = new byte[Smb2TreeConnectRequest.FixedSize];
-        Wire.WriteUInt16LittleEndian(body, 0, Smb2TreeConnectRequest.StructureSize);
-        Wire.WriteUInt16LittleEndian(body, Smb2TreeConnectRequest.PathOffsetFieldOffset, Smb2Header.Size + Smb2TreeConnectRequest.FixedSize);
-        Wire.WriteUInt16LittleEndian(body, Smb2TreeConnectRequest.PathLengthOffset, path.Length);
-        response = await ExchangeAsync(Smb2Command.TreeConnect, Wire.Join(body, path), ct).ConfigureAwait(false);
-        tree = Wire.ReadUInt32LittleEndian(response, Smb2Header.TreeIdOffset);
-        if (tree == 0 || response.Length < Smb2Header.Size + Smb2TreeConnectResponse.FixedSize || response[Smb2Header.Size + Smb2TreeConnectResponse.ShareTypeOffset] != Smb2ShareType.Disk)
+        body = new byte[Smb3TreeConnectRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(body, 0, Smb3TreeConnectRequest.StructureSize);
+        Wire.WriteUInt16LittleEndian(body, Smb3TreeConnectRequest.PathOffsetFieldOffset, Smb3Header.Size + Smb3TreeConnectRequest.FixedSize);
+        Wire.WriteUInt16LittleEndian(body, Smb3TreeConnectRequest.PathLengthOffset, path.Length);
+        response = await ExchangeAsync(Smb3Command.TreeConnect, Wire.Join(body, path), ct).ConfigureAwait(false);
+        tree = Wire.ReadUInt32LittleEndian(response, Smb3Header.TreeIdOffset);
+        if (tree == 0 || response.Length < Smb3Header.Size + Smb3TreeConnectResponse.FixedSize || response[Smb3Header.Size + Smb3TreeConnectResponse.ShareTypeOffset] != Smb3ShareType.Disk)
             throw new SmbException(NtStatus.BadNetworkName);
-        encrypted |= (Wire.ReadUInt32LittleEndian(response, Smb2Header.Size + Smb2TreeConnectResponse.ShareFlagsOffset) & Smb2ShareFlags.EncryptData) != 0;
+        encrypted |= (Wire.ReadUInt32LittleEndian(response, Smb3Header.Size + Smb3TreeConnectResponse.ShareFlagsOffset) & Smb3ShareFlags.EncryptData) != 0;
     }
 
     private static byte[] CreateSessionSetupBody(byte[] token)
     {
-        var b = new byte[Smb2SessionSetupRequest.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2SessionSetupRequest.StructureSize);
-        b[Smb2SessionSetupRequest.SecurityModeOffset] = (byte)Smb2SecurityMode.SigningEnabledAndRequired;
-        Wire.WriteUInt16LittleEndian(b, Smb2SessionSetupRequest.SecurityBufferOffsetFieldOffset, Smb2Header.Size + Smb2SessionSetupRequest.FixedSize);
-        Wire.WriteUInt16LittleEndian(b, Smb2SessionSetupRequest.SecurityBufferLengthOffset, token.Length);
+        var b = new byte[Smb3SessionSetupRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3SessionSetupRequest.StructureSize);
+        b[Smb3SessionSetupRequest.SecurityModeOffset] = (byte)Smb3SecurityMode.SigningEnabledAndRequired;
+        Wire.WriteUInt16LittleEndian(b, Smb3SessionSetupRequest.SecurityBufferOffsetFieldOffset, Smb3Header.Size + Smb3SessionSetupRequest.FixedSize);
+        Wire.WriteUInt16LittleEndian(b, Smb3SessionSetupRequest.SecurityBufferLengthOffset, token.Length);
         return Wire.Join(b, token);
     }
 
@@ -153,15 +153,15 @@ public sealed class SmbClient : IAsyncDisposable
         await transport.SendAsync(packet, ct).ConfigureAwait(false);
         var r = await transport.ReceiveAsync(ct).ConfigureAwait(false);
         Wire.Validate(r);
-        if (Wire.ReadUInt64LittleEndian(r, Smb2Header.MessageIdOffset) != Wire.ReadUInt64LittleEndian(packet, Smb2Header.MessageIdOffset) || Wire.ReadUInt16LittleEndian(r, Smb2Header.CommandOffset) != Wire.ReadUInt16LittleEndian(packet, Smb2Header.CommandOffset) || Wire.ReadUInt32LittleEndian(r, Smb2Header.NextCommandOffset) != 0 || (Wire.ReadUInt32LittleEndian(r, Smb2Header.FlagsOffset) & Smb2HeaderFlags.ResponseOrAsync) != Smb2HeaderFlags.ServerToRedir)
+        if (Wire.ReadUInt64LittleEndian(r, Smb3Header.MessageIdOffset) != Wire.ReadUInt64LittleEndian(packet, Smb3Header.MessageIdOffset) || Wire.ReadUInt16LittleEndian(r, Smb3Header.CommandOffset) != Wire.ReadUInt16LittleEndian(packet, Smb3Header.CommandOffset) || Wire.ReadUInt32LittleEndian(r, Smb3Header.NextCommandOffset) != 0 || (Wire.ReadUInt32LittleEndian(r, Smb3Header.FlagsOffset) & Smb3HeaderFlags.ResponseOrAsync) != Smb3HeaderFlags.ServerToRedir)
             throw new SmbException(NtStatus.InvalidParameter);
-        credits = checked(credits + Wire.ReadUInt16LittleEndian(r, Smb2Header.CreditsOffset));
+        credits = checked(credits + Wire.ReadUInt16LittleEndian(r, Smb3Header.CreditsOffset));
         return r;
     }
 
     private static void ThrowIfFailed(byte[] r)
     {
-        uint status = Wire.ReadUInt32LittleEndian(r, Smb2Header.StatusOffset);
+        uint status = Wire.ReadUInt32LittleEndian(r, Smb3Header.StatusOffset);
         if (status != 0)
             throw new SmbException(status);
     }
@@ -182,7 +182,7 @@ public sealed class SmbClient : IAsyncDisposable
                 crypto!.Sign(p);
             await transport.SendAsync(encrypted ? crypto!.Encrypt(p, session) : p, timeout.Token).ConfigureAwait(false);
             var r = await transport.ReceiveAsync(timeout.Token).ConfigureAwait(false);
-            bool wasEncrypted = r[Smb2Header.ProtocolIdOffset] == Smb2TransformHeader.ProtocolPrefix;
+            bool wasEncrypted = r[Smb3Header.ProtocolIdOffset] == Smb3TransformHeader.ProtocolPrefix;
             if (wasEncrypted)
                 r = crypto!.Decrypt(r, session);
             else if (encrypted)
@@ -190,10 +190,10 @@ public sealed class SmbClient : IAsyncDisposable
             else
                 crypto!.Verify(r);
             Wire.Validate(r);
-            if (Wire.ReadUInt64LittleEndian(r, Smb2Header.MessageIdOffset) != Wire.ReadUInt64LittleEndian(p, Smb2Header.MessageIdOffset) || Wire.ReadUInt16LittleEndian(r, Smb2Header.CommandOffset) != cmd || Wire.ReadUInt64LittleEndian(r, Smb2Header.SessionIdOffset) != session || Wire.ReadUInt32LittleEndian(r, Smb2Header.NextCommandOffset) != 0 || (Wire.ReadUInt32LittleEndian(r, Smb2Header.FlagsOffset) & Smb2HeaderFlags.ResponseOrAsync) != Smb2HeaderFlags.ServerToRedir)
+            if (Wire.ReadUInt64LittleEndian(r, Smb3Header.MessageIdOffset) != Wire.ReadUInt64LittleEndian(p, Smb3Header.MessageIdOffset) || Wire.ReadUInt16LittleEndian(r, Smb3Header.CommandOffset) != cmd || Wire.ReadUInt64LittleEndian(r, Smb3Header.SessionIdOffset) != session || Wire.ReadUInt32LittleEndian(r, Smb3Header.NextCommandOffset) != 0 || (Wire.ReadUInt32LittleEndian(r, Smb3Header.FlagsOffset) & Smb3HeaderFlags.ResponseOrAsync) != Smb3HeaderFlags.ServerToRedir)
                 throw new SmbException(NtStatus.InvalidParameter);
             responseTrusted = true;
-            credits = checked(credits + Wire.ReadUInt16LittleEndian(r, Smb2Header.CreditsOffset));
+            credits = checked(credits + Wire.ReadUInt16LittleEndian(r, Smb3Header.CreditsOffset));
             ThrowIfFailed(r);
             return r;
         }
@@ -217,31 +217,31 @@ public sealed class SmbClient : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(path);
         var name = Encoding.Unicode.GetBytes(path.Replace('/', '\\'));
-        var b = new byte[Smb2CreateRequest.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2CreateRequest.StructureSize);
-        Wire.WriteUInt32LittleEndian(b, Smb2CreateRequest.ImpersonationLevelOffset, Smb2ImpersonationLevel.Impersonation);
+        var b = new byte[Smb3CreateRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3CreateRequest.StructureSize);
+        Wire.WriteUInt32LittleEndian(b, Smb3CreateRequest.ImpersonationLevelOffset, Smb3ImpersonationLevel.Impersonation);
         uint desired = (access & FileAccess.Read) != 0 ? FileAccessMask.FileGenericRead : 0;
         if ((access & FileAccess.Write) != 0)
             desired |= FileAccessMask.FileGenericWrite | FileAccessMask.Delete;
-        Wire.WriteUInt32LittleEndian(b, Smb2CreateRequest.DesiredAccessOffset, desired);
-        Wire.WriteUInt32LittleEndian(b, Smb2CreateRequest.FileAttributesOffset, directory ? FileAttributeFlags.Directory : FileAttributeFlags.Normal);
-        Wire.WriteUInt32LittleEndian(b, Smb2CreateRequest.ShareAccessOffset, (uint)share);
-        Wire.WriteUInt32LittleEndian(b, Smb2CreateRequest.CreateDispositionOffset, mode switch
+        Wire.WriteUInt32LittleEndian(b, Smb3CreateRequest.DesiredAccessOffset, desired);
+        Wire.WriteUInt32LittleEndian(b, Smb3CreateRequest.FileAttributesOffset, directory ? FileAttributeFlags.Directory : FileAttributeFlags.Normal);
+        Wire.WriteUInt32LittleEndian(b, Smb3CreateRequest.ShareAccessOffset, (uint)share);
+        Wire.WriteUInt32LittleEndian(b, Smb3CreateRequest.CreateDispositionOffset, mode switch
         {
-            FileMode.CreateNew => Smb2CreateDisposition.Create,
-            FileMode.Create => Smb2CreateDisposition.OverwriteIf,
-            FileMode.Open => Smb2CreateDisposition.Open,
-            FileMode.OpenOrCreate => Smb2CreateDisposition.OpenIf,
-            FileMode.Truncate => Smb2CreateDisposition.Overwrite,
+            FileMode.CreateNew => Smb3CreateDisposition.Create,
+            FileMode.Create => Smb3CreateDisposition.OverwriteIf,
+            FileMode.Open => Smb3CreateDisposition.Open,
+            FileMode.OpenOrCreate => Smb3CreateDisposition.OpenIf,
+            FileMode.Truncate => Smb3CreateDisposition.Overwrite,
             _ => throw new NotSupportedException("Append mode is not supported; use an explicit offset.")
         });
-        Wire.WriteUInt32LittleEndian(b, Smb2CreateRequest.CreateOptionsOffset, directory ? Smb2CreateOptions.DirectoryFile : Smb2CreateOptions.NonDirectoryFile);
-        Wire.WriteUInt16LittleEndian(b, Smb2CreateRequest.NameOffsetFieldOffset, Smb2Header.Size + Smb2CreateRequest.FixedSize);
-        Wire.WriteUInt16LittleEndian(b, Smb2CreateRequest.NameLengthOffset, name.Length);
-        var r = await ExchangeAsync(Smb2Command.Create, Wire.Join(b, name), ct).ConfigureAwait(false);
-        if (r.Length < Smb2Header.Size + Smb2CreateResponse.FixedSize || Wire.ReadUInt16LittleEndian(r, Smb2Header.Size) != Smb2CreateResponse.StructureSize)
+        Wire.WriteUInt32LittleEndian(b, Smb3CreateRequest.CreateOptionsOffset, directory ? Smb3CreateOptions.DirectoryFile : Smb3CreateOptions.NonDirectoryFile);
+        Wire.WriteUInt16LittleEndian(b, Smb3CreateRequest.NameOffsetFieldOffset, Smb3Header.Size + Smb3CreateRequest.FixedSize);
+        Wire.WriteUInt16LittleEndian(b, Smb3CreateRequest.NameLengthOffset, name.Length);
+        var r = await ExchangeAsync(Smb3Command.Create, Wire.Join(b, name), ct).ConfigureAwait(false);
+        if (r.Length < Smb3Header.Size + Smb3CreateResponse.FixedSize || Wire.ReadUInt16LittleEndian(r, Smb3Header.Size) != Smb3CreateResponse.StructureSize)
             throw new SmbException(NtStatus.InvalidParameter);
-        return new SmbFile(this, r[(Smb2Header.Size + Smb2CreateResponse.FileIdOffset)..(Smb2Header.Size + Smb2CreateResponse.FileIdOffset + Smb2FileId.Size)], checked((long)Wire.ReadUInt64LittleEndian(r, Smb2Header.Size + Smb2CreateResponse.EndOfFileOffset)));
+        return new SmbFile(this, r[(Smb3Header.Size + Smb3CreateResponse.FileIdOffset)..(Smb3Header.Size + Smb3CreateResponse.FileIdOffset + Smb3FileId.Size)], checked((long)Wire.ReadUInt64LittleEndian(r, Smb3Header.Size + Smb3CreateResponse.EndOfFileOffset)));
     }
 
     internal async Task<int> ReadAsync(byte[] id, Memory<byte> buffer, long offset, CancellationToken ct)
@@ -250,18 +250,18 @@ public sealed class SmbClient : IAsyncDisposable
         int n = Math.Min(buffer.Length, SmbLimits.MaxTransferSize);
         if (n == 0)
             return 0;
-        var b = new byte[Smb2ReadRequest.StructureSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2ReadRequest.StructureSize);
-        Wire.WriteUInt32LittleEndian(b, Smb2ReadRequest.LengthOffset, (uint)n);
-        Wire.WriteUInt64LittleEndian(b, Smb2ReadRequest.OffsetFieldOffset, (ulong)offset);
-        id.CopyTo(b, Smb2ReadRequest.FileIdOffset);
+        var b = new byte[Smb3ReadRequest.StructureSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3ReadRequest.StructureSize);
+        Wire.WriteUInt32LittleEndian(b, Smb3ReadRequest.LengthOffset, (uint)n);
+        Wire.WriteUInt64LittleEndian(b, Smb3ReadRequest.OffsetFieldOffset, (ulong)offset);
+        id.CopyTo(b, Smb3ReadRequest.FileIdOffset);
         try
         {
-            var r = await ExchangeAsync(Smb2Command.Read, b, ct).ConfigureAwait(false);
-            int length = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2ReadResponse.DataLengthOffset));
+            var r = await ExchangeAsync(Smb3Command.Read, b, ct).ConfigureAwait(false);
+            int length = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3ReadResponse.DataLengthOffset));
             if (length > n)
                 throw new SmbException(NtStatus.InvalidParameter);
-            Wire.Slice(r, r[Smb2Header.Size + Smb2ReadResponse.DataOffsetFieldOffset], length).CopyTo(buffer.Span);
+            Wire.Slice(r, r[Smb3Header.Size + Smb3ReadResponse.DataOffsetFieldOffset], length).CopyTo(buffer.Span);
             return length;
         }
         catch (SmbException e) when (e.NtStatus == NtStatus.EndOfFile)
@@ -276,15 +276,15 @@ public sealed class SmbClient : IAsyncDisposable
         while (data.Length > 0)
         {
             int n = Math.Min(data.Length, SmbLimits.MaxTransferSize);
-            var b = new byte[Smb2WriteRequest.FixedSize + n];
-            Wire.WriteUInt16LittleEndian(b, 0, Smb2WriteRequest.StructureSize);
-            Wire.WriteUInt16LittleEndian(b, Smb2WriteRequest.DataOffsetFieldOffset, Smb2Header.Size + Smb2WriteRequest.FixedSize);
-            Wire.WriteUInt32LittleEndian(b, Smb2WriteRequest.LengthOffset, (uint)n);
-            Wire.WriteUInt64LittleEndian(b, Smb2WriteRequest.OffsetFieldOffset, checked((ulong)offset));
-            id.CopyTo(b, Smb2WriteRequest.FileIdOffset);
-            data.Span[..n].CopyTo(b.AsSpan(Smb2WriteRequest.FixedSize));
-            var r = await ExchangeAsync(Smb2Command.Write, b, ct).ConfigureAwait(false);
-            int written = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2WriteResponse.CountOffset));
+            var b = new byte[Smb3WriteRequest.FixedSize + n];
+            Wire.WriteUInt16LittleEndian(b, 0, Smb3WriteRequest.StructureSize);
+            Wire.WriteUInt16LittleEndian(b, Smb3WriteRequest.DataOffsetFieldOffset, Smb3Header.Size + Smb3WriteRequest.FixedSize);
+            Wire.WriteUInt32LittleEndian(b, Smb3WriteRequest.LengthOffset, (uint)n);
+            Wire.WriteUInt64LittleEndian(b, Smb3WriteRequest.OffsetFieldOffset, checked((ulong)offset));
+            id.CopyTo(b, Smb3WriteRequest.FileIdOffset);
+            data.Span[..n].CopyTo(b.AsSpan(Smb3WriteRequest.FixedSize));
+            var r = await ExchangeAsync(Smb3Command.Write, b, ct).ConfigureAwait(false);
+            int written = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3WriteResponse.CountOffset));
             if (written < 1 || written > n)
                 throw new IOException("Invalid SMB write count.");
             offset = checked(offset + written);
@@ -294,44 +294,44 @@ public sealed class SmbClient : IAsyncDisposable
 
     internal async Task CloseAsync(byte[] id, CancellationToken ct)
     {
-        var b = new byte[Smb2CloseRequest.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2CloseRequest.StructureSize);
-        id.CopyTo(b, Smb2CloseRequest.FileIdOffset);
-        _ = await ExchangeAsync(Smb2Command.Close, b, ct).ConfigureAwait(false);
+        var b = new byte[Smb3CloseRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3CloseRequest.StructureSize);
+        id.CopyTo(b, Smb3CloseRequest.FileIdOffset);
+        _ = await ExchangeAsync(Smb3Command.Close, b, ct).ConfigureAwait(false);
     }
 
     internal async Task FlushAsync(byte[] id, CancellationToken ct)
     {
-        var b = new byte[Smb2FlushRequest.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2FlushRequest.StructureSize);
-        id.CopyTo(b, Smb2FlushRequest.FileIdOffset);
-        _ = await ExchangeAsync(Smb2Command.Flush, b, ct).ConfigureAwait(false);
+        var b = new byte[Smb3FlushRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3FlushRequest.StructureSize);
+        id.CopyTo(b, Smb3FlushRequest.FileIdOffset);
+        _ = await ExchangeAsync(Smb3Command.Flush, b, ct).ConfigureAwait(false);
     }
 
     internal async Task SetAsync(byte[] id, int cls, byte[] data, CancellationToken ct)
     {
-        var b = new byte[Smb2SetInfoRequest.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2SetInfoRequest.StructureSize);
-        b[Smb2SetInfoRequest.InfoTypeOffset] = Smb2InfoType.File;
-        b[Smb2SetInfoRequest.FileInfoClassOffset] = (byte)cls;
-        Wire.WriteUInt32LittleEndian(b, Smb2SetInfoRequest.BufferLengthOffset, (uint)data.Length);
-        Wire.WriteUInt16LittleEndian(b, Smb2SetInfoRequest.BufferOffsetFieldOffset, Smb2Header.Size + Smb2SetInfoRequest.FixedSize);
-        id.CopyTo(b, Smb2SetInfoRequest.FileIdOffset);
-        _ = await ExchangeAsync(Smb2Command.SetInfo, Wire.Join(b, data), ct).ConfigureAwait(false);
+        var b = new byte[Smb3SetInfoRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3SetInfoRequest.StructureSize);
+        b[Smb3SetInfoRequest.InfoTypeOffset] = Smb3InfoType.File;
+        b[Smb3SetInfoRequest.FileInfoClassOffset] = (byte)cls;
+        Wire.WriteUInt32LittleEndian(b, Smb3SetInfoRequest.BufferLengthOffset, (uint)data.Length);
+        Wire.WriteUInt16LittleEndian(b, Smb3SetInfoRequest.BufferOffsetFieldOffset, Smb3Header.Size + Smb3SetInfoRequest.FixedSize);
+        id.CopyTo(b, Smb3SetInfoRequest.FileIdOffset);
+        _ = await ExchangeAsync(Smb3Command.SetInfo, Wire.Join(b, data), ct).ConfigureAwait(false);
     }
 
     /// <summary>Queries file or directory metadata using a temporary remote handle.</summary>
     public async Task<SmbEntry> GetInfoAsync(string path, bool directory = false, CancellationToken ct = default)
     {
         await using var file = await OpenCoreAsync(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, directory, ct).ConfigureAwait(false);
-        var b = new byte[Smb2QueryInfoRequest.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2QueryInfoRequest.StructureSize);
-        b[Smb2QueryInfoRequest.InfoTypeOffset] = Smb2InfoType.File;
-        b[Smb2QueryInfoRequest.FileInfoClassOffset] = FileInformationClass.NetworkOpenInformation;
-        Wire.WriteUInt32LittleEndian(b, Smb2QueryInfoRequest.OutputBufferLengthOffset, FileNetworkOpenInformation.Size);
-        file.Id.CopyTo(b, Smb2QueryInfoRequest.FileIdOffset);
-        var r = await ExchangeAsync(Smb2Command.QueryInfo, b, ct).ConfigureAwait(false);
-        var data = Wire.Slice(r, Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2QueryResponse.OutputBufferOffsetFieldOffset), checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2QueryResponse.OutputBufferLengthOffset)));
+        var b = new byte[Smb3QueryInfoRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3QueryInfoRequest.StructureSize);
+        b[Smb3QueryInfoRequest.InfoTypeOffset] = Smb3InfoType.File;
+        b[Smb3QueryInfoRequest.FileInfoClassOffset] = FileInformationClass.NetworkOpenInformation;
+        Wire.WriteUInt32LittleEndian(b, Smb3QueryInfoRequest.OutputBufferLengthOffset, FileNetworkOpenInformation.Size);
+        file.Id.CopyTo(b, Smb3QueryInfoRequest.FileIdOffset);
+        var r = await ExchangeAsync(Smb3Command.QueryInfo, b, ct).ConfigureAwait(false);
+        var data = Wire.Slice(r, Wire.ReadUInt16LittleEndian(r, Smb3Header.Size + Smb3QueryResponse.OutputBufferOffsetFieldOffset), checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3QueryResponse.OutputBufferLengthOffset)));
         return new(path, checked((long)Wire.ReadUInt64LittleEndian(data, FileNetworkOpenInformation.EndOfFileOffset)), (FileAttributes)Wire.ReadUInt32LittleEndian(data, FileNetworkOpenInformation.FileAttributesOffset), DateTime.FromFileTimeUtc(checked((long)Wire.ReadUInt64LittleEndian(data, FileBasicInformation.CreationTimeOffset))), DateTime.FromFileTimeUtc(checked((long)Wire.ReadUInt64LittleEndian(data, FileBasicInformation.LastWriteTimeOffset))))
         {
             LastAccessTimeUtc = DateTime.FromFileTimeUtc(checked((long)Wire.ReadUInt64LittleEndian(data, FileBasicInformation.LastAccessTimeOffset))),
@@ -408,27 +408,27 @@ public sealed class SmbClient : IAsyncDisposable
         bool first = true;
         while (true)
         {
-            var b = new byte[Smb2QueryDirectoryRequest.FixedSize + sizeof(char)];
-            Wire.WriteUInt16LittleEndian(b, 0, Smb2QueryDirectoryRequest.StructureSize);
-            b[Smb2QueryDirectoryRequest.FileInformationClassOffset] = FileInformationClass.IdBothDirectoryInformation;
-            b[Smb2QueryDirectoryRequest.FlagsOffset] = first ? Smb2QueryDirectoryFlags.RestartScans : (byte)0;
-            f.Id.CopyTo(b, Smb2QueryDirectoryRequest.FileIdOffset);
-            Wire.WriteUInt16LittleEndian(b, Smb2QueryDirectoryRequest.FileNameOffsetFieldOffset, Smb2Header.Size + Smb2QueryDirectoryRequest.FixedSize);
-            Wire.WriteUInt16LittleEndian(b, Smb2QueryDirectoryRequest.FileNameLengthOffset, sizeof(char));
-            Wire.WriteUInt32LittleEndian(b, Smb2QueryDirectoryRequest.OutputBufferLengthOffset, SmbLimits.MaxTransferSize);
-            b[Smb2QueryDirectoryRequest.FixedSize] = (byte)'*';
+            var b = new byte[Smb3QueryDirectoryRequest.FixedSize + sizeof(char)];
+            Wire.WriteUInt16LittleEndian(b, 0, Smb3QueryDirectoryRequest.StructureSize);
+            b[Smb3QueryDirectoryRequest.FileInformationClassOffset] = FileInformationClass.IdBothDirectoryInformation;
+            b[Smb3QueryDirectoryRequest.FlagsOffset] = first ? Smb3QueryDirectoryFlags.RestartScans : (byte)0;
+            f.Id.CopyTo(b, Smb3QueryDirectoryRequest.FileIdOffset);
+            Wire.WriteUInt16LittleEndian(b, Smb3QueryDirectoryRequest.FileNameOffsetFieldOffset, Smb3Header.Size + Smb3QueryDirectoryRequest.FixedSize);
+            Wire.WriteUInt16LittleEndian(b, Smb3QueryDirectoryRequest.FileNameLengthOffset, sizeof(char));
+            Wire.WriteUInt32LittleEndian(b, Smb3QueryDirectoryRequest.OutputBufferLengthOffset, SmbLimits.MaxTransferSize);
+            b[Smb3QueryDirectoryRequest.FixedSize] = (byte)'*';
             first = false;
             byte[] r;
             try
             {
-                r = await ExchangeAsync(Smb2Command.QueryDirectory, b, ct).ConfigureAwait(false);
+                r = await ExchangeAsync(Smb3Command.QueryDirectory, b, ct).ConfigureAwait(false);
             }
             catch (SmbException e) when (e.NtStatus == NtStatus.NoMoreFiles)
             {
                 break;
             }
 
-            int o = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2QueryResponse.OutputBufferOffsetFieldOffset), n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2QueryResponse.OutputBufferLengthOffset));
+            int o = Wire.ReadUInt16LittleEndian(r, Smb3Header.Size + Smb3QueryResponse.OutputBufferOffsetFieldOffset), n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3QueryResponse.OutputBufferLengthOffset));
             var data = Wire.Slice(r, o, n);
             int p = 0;
             while (true)
@@ -461,7 +461,7 @@ public sealed class SmbClient : IAsyncDisposable
             {
                 try
                 {
-                    _ = await ExchangeAsync(Smb2Command.Logoff, Wire.CreateSimpleMessage(), CancellationToken.None).ConfigureAwait(false);
+                    _ = await ExchangeAsync(Smb3Command.Logoff, Wire.CreateSimpleMessage(), CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (IOException)
                 {

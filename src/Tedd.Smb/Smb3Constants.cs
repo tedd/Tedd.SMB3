@@ -1,8 +1,9 @@
 namespace Tedd.Smb;
 
-// MS-SMB2 wire values. These remain constants rather than enums so the existing
-// integer serializers and flag expressions retain their exact underlying types.
-internal static class Smb2Command
+// SMB 3.1.1 wire values from MS-SMB2, which specifies both SMB2 and SMB3.
+// The Smb3 prefix identifies this implementation's supported dialect family.
+// Constants preserve the integer serializers' exact underlying types.
+internal static class Smb3Command
 {
     internal const ushort Negotiate = 0x0000;
     internal const ushort SessionSetup = 0x0001;
@@ -22,14 +23,14 @@ internal static class Smb2Command
     internal const ushort SetInfo = 0x0011;
 }
 
-internal static class Smb2Dialect
+internal static class Smb3Dialect
 {
     internal const ushort Wildcard = 0x02ff;
     internal const ushort Smb311 = 0x0311;
 }
 
 // Response/async bits are validated independently of the signed/related-operation bits.
-internal static class Smb2HeaderFlags
+internal static class Smb3HeaderFlags
 {
     internal const uint ServerToRedir = 0x00000001;
     internal const uint AsyncCommand = 0x00000002;
@@ -38,67 +39,67 @@ internal static class Smb2HeaderFlags
     internal const uint ResponseOrAsync = ServerToRedir | AsyncCommand;
 }
 
-internal static class Smb2SecurityMode
+internal static class Smb3SecurityMode
 {
     internal const ushort SigningEnabled = 0x0001;
     internal const ushort SigningRequired = 0x0002;
     internal const ushort SigningEnabledAndRequired = SigningEnabled | SigningRequired;
 }
 
-internal static class Smb2GlobalCapabilities
+internal static class Smb3GlobalCapabilities
 {
     internal const uint Encryption = 0x00000040;
 }
 
-internal static class Smb2SessionFlags
+internal static class Smb3SessionFlags
 {
     internal const ushort IsGuest = 0x0001;
     internal const ushort IsNull = 0x0002;
     internal const ushort EncryptData = 0x0004;
 }
 
-internal static class Smb2ShareType
+internal static class Smb3ShareType
 {
     internal const byte Disk = 0x01;
     internal const byte Pipe = 0x02;
 }
 
-internal static class Smb2ShareFlags
+internal static class Smb3ShareFlags
 {
     internal const uint NoCaching = 0x00000030;
     internal const uint EncryptData = 0x00008000;
 }
 
-internal static class Smb2NegotiateContextType
+internal static class Smb3NegotiateContextType
 {
     internal const ushort PreauthIntegrityCapabilities = 0x0001;
     internal const ushort EncryptionCapabilities = 0x0002;
     internal const ushort SigningCapabilities = 0x0008;
 }
 
-internal static class Smb2PreauthHashAlgorithm
+internal static class Smb3PreauthHashAlgorithm
 {
     internal const ushort Sha512 = 0x0001;
 }
 
-internal static class Smb2Cipher
+internal static class Smb3Cipher
 {
     internal const ushort None = 0;
     internal const ushort Aes128Ccm = 0x0001;
     internal const ushort Aes128Gcm = 0x0002;
 }
 
-internal static class Smb2SigningAlgorithm
+internal static class Smb3SigningAlgorithm
 {
     internal const ushort AesCmac = 0x0001;
 }
 
-internal static class Smb2ImpersonationLevel
+internal static class Smb3ImpersonationLevel
 {
     internal const uint Impersonation = 0x00000002;
 }
 
-internal static class Smb2CreateDisposition
+internal static class Smb3CreateDisposition
 {
     internal const uint Supersede = 0;
     internal const uint Open = 1;
@@ -108,7 +109,7 @@ internal static class Smb2CreateDisposition
     internal const uint OverwriteIf = 5;
 }
 
-internal static class Smb2CreateAction
+internal static class Smb3CreateAction
 {
     internal const uint Superseded = 0;
     internal const uint Opened = 1;
@@ -116,7 +117,7 @@ internal static class Smb2CreateAction
     internal const uint Overwritten = 3;
 }
 
-internal static class Smb2CreateOptions
+internal static class Smb3CreateOptions
 {
     internal const uint DirectoryFile = 0x00000001;
     internal const uint WriteThrough = 0x00000002;
@@ -162,24 +163,24 @@ internal static class FileShareAccess
     internal const uint All = Read | Write | Delete;
 }
 
-internal static class Smb2QueryDirectoryFlags
+internal static class Smb3QueryDirectoryFlags
 {
     internal const byte RestartScans = 0x01;
     internal const byte ReturnSingleEntry = 0x02;
     internal const byte Reopen = 0x10;
 }
 
-internal static class Smb2CloseFlags
+internal static class Smb3CloseFlags
 {
     internal const ushort PostqueryAttributes = 0x0001;
 }
 
-internal static class Smb2WriteFlags
+internal static class Smb3WriteFlags
 {
     internal const uint WriteThrough = 0x00000001;
 }
 
-internal static class Smb2InfoType
+internal static class Smb3InfoType
 {
     internal const byte File = 0x01;
     internal const byte FileSystem = 0x02;
@@ -230,7 +231,7 @@ internal static class FileSystemControlCode
     internal const uint ValidateNegotiateInfo = 0x00140204;
 }
 
-internal static class Smb2CreateContextName
+internal static class Smb3CreateContextName
 {
     internal const string EaBuffer = "ExtA";
     internal const string TimewarpToken = "TWrp";

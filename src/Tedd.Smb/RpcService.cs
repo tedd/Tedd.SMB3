@@ -254,7 +254,7 @@ internal sealed class RpcService
             {
                 writer.WriteUInt32(SrvsvcReferent.Container);
                 if (level == SrvsvcShareInfoLevel.Flags)
-                    writer.WriteUInt32(index == 0 ? Smb2ShareFlags.NoCaching : 0);
+                    writer.WriteUInt32(index == 0 ? Smb3ShareFlags.NoCaching : 0);
                 else
                 {
                     Fixed(level, index);

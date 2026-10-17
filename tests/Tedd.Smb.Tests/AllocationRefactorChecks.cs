@@ -26,7 +26,7 @@ internal static class AllocationRefactorChecks
             "12345678901234567890123456789012345678901234567890123456789012345678901234567890")),
             Convert.FromHexString("E33B4DDC9C38F2199C3E7B164FCC0536"));
 
-        foreach (int cipher in new[] { Smb2Cipher.Aes128Gcm, Smb2Cipher.Aes128Ccm })
+        foreach (int cipher in new[] { Smb3Cipher.Aes128Gcm, Smb3Cipher.Aes128Ccm })
         {
             using var sender = new SessionCrypto(new byte[16], new byte[64], false, cipher);
             using var receiver = new SessionCrypto(new byte[16], new byte[64], true, cipher);

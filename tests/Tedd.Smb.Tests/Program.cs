@@ -48,7 +48,7 @@ if (args.Length != 1 || !Path.IsPathFullyQualified(args[0])) throw new ArgumentE
 string root = args[0]; Directory.CreateDirectory(root);
 // Literal fixtures deliberately remain independent of the protocol constants.
 Hex("FE534D4240000100000000000900200000000000000000000807060504030201FFFE000044332211887766554433221100000000000000000000000000000000",
-    Wire.Header(Smb2Command.Write, 0x0102030405060708, 0x1122334455667788, 0x11223344), "SMB2 header wire fixture");
+    Wire.Header(Smb3Command.Write, 0x0102030405060708, 0x1122334455667788, 0x11223344), "SMB3 header wire fixture");
 var contexts = Negotiation.Contexts();
 Hex("02000400000000000100020000000000", contexts[48..64], "SMB3 encryption context wire fixture");
 Hex("08000400000000000100010000000000", contexts[64..80], "SMB3 signing context wire fixture");
@@ -60,6 +60,11 @@ await AllocationRefactorChecks.RunAsync(root);
 Hex("31D6CFE0D16AE931B73C59D7E0C089C0", Crypto.Md4([]), "RFC1320 MD4 empty");
 Hex("A448017AAF21D8525FC10AE87AA6729D", Crypto.Md4(Encoding.ASCII.GetBytes("abc")), "RFC1320 MD4 abc");
 Hex("A4F49C406510BDCAB6824EE7C30FD852", Crypto.Md4(Encoding.Unicode.GetBytes("Password")), "NT hash");
+// Fixed HMAC-SHA256 fixtures independently protect the SMB 3.1.1 KDF labels,
+// their NUL termination and direction. A shared client/server typo would otherwise agree.
+Hex("A06A153E09BD0F34706A5C671ACAA37D", Crypto.Kdf(new byte[16], Smb3Cryptography.SigningKeyLabel, new byte[64]), "SMB3 signing key derivation");
+Hex("61D3D00D21FE5DCE0F7ED579239E3ABC", Crypto.Kdf(new byte[16], Smb3Cryptography.ClientToServerCipherKeyLabel, new byte[64]), "SMB3 client-to-server key derivation");
+Hex("62AD6368E1497589774350D80E8828D8", Crypto.Kdf(new byte[16], Smb3Cryptography.ServerToClientCipherKeyLabel, new byte[64]), "SMB3 server-to-client key derivation");
 var cmacKey = Convert.FromHexString("2B7E151628AED2A6ABF7158809CF4F3C");
 Hex("BB1D6929E95937287FA37D129B756746", Crypto.Cmac(cmacKey, []), "NIST CMAC empty");
 Hex("070A16B46B4D4144F79BDD9DD04A287C", Crypto.Cmac(cmacKey, Convert.FromHexString("6BC1BEE22E409F96E93D7E117393172A")), "NIST CMAC full block");
