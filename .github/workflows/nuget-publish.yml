@@ -1,0 +1,107 @@
+name: Build, test and publish NuGet
+
+on:
+  push:
+    branches: [main, deploy]
+  pull_request:
+    branches: [main, deploy]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuget-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    outputs:
+      release-changed: ${{ steps.release.outputs.changed }}
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect release version change
+        id: release
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PREVIOUS_REVISION: ${{ github.event.before }}
+        run: |
+          $changed = $false
+          if ($env:GITHUB_REF -ceq 'refs/heads/deploy') {
+            if ($env:EVENT_NAME -eq 'workflow_dispatch' -or $env:PREVIOUS_REVISION -match '^0+$') {
+              $changed = $true
+            } elseif ($env:EVENT_NAME -eq 'push') {
+              $path = 'src/Tedd.Smb/Tedd.Smb.csproj'
+              $current = [xml](Get-Content -LiteralPath $path -Raw)
+              $previousText = git show "${env:PREVIOUS_REVISION}:$path"
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot verify the previous release version.' }
+              $previous = [xml](($previousText -join "`n").TrimStart([char]0xFEFF))
+              $changed = [string]$current.Project.PropertyGroup.Version -cne [string]$previous.Project.PropertyGroup.Version
+            }
+          }
+          "changed=$($changed.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build Tedd.Smb.slnx --configuration Release --artifacts-path "$env:RUNNER_TEMP/smb-release/artifacts"
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+      - name: Run protocol, security and file transfer checks
+        shell: pwsh
+        run: |
+          dotnet "$env:RUNNER_TEMP/smb-release/artifacts/bin/Tedd.Smb.Tests/release/Tedd.Smb.Tests.dll" "$env:RUNNER_TEMP/smb-release/fixtures"
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+      - name: Pack
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          dotnet pack src/Tedd.Smb/Tedd.Smb.csproj --configuration Release --no-build --no-restore --artifacts-path "$env:RUNNER_TEMP/smb-release/artifacts" --output "$env:RUNNER_TEMP/smb-release/packages"
+          if ($LASTEXITCODE -ne 0) { throw 'Pack failed.' }
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: nuget-packages
+          path: ${{ runner.temp }}/smb-release/packages/*
+          if-no-files-found: error
+
+  publish:
+    needs: build-test
+    if: github.ref == 'refs/heads/deploy' && needs.build-test.outputs.release-changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: nuget
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release branch and version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -cne 'refs/heads/deploy') { throw 'Publication requires the deploy branch.' }
+          $project = [xml](Get-Content -LiteralPath 'src/Tedd.Smb/Tedd.Smb.csproj' -Raw)
+          if ([string]$project.Project.PropertyGroup.Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be MAJOR.MINOR.PATCH.' }
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: nuget-packages
+          path: ${{ runner.temp }}/smb-release/packages
+      - name: Publish package and symbols
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) { throw 'Set NUGET_API_KEY in this repository or its nuget environment.' }
+          $packages = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/smb-release/packages" -Filter '*.nupkg')
+          if ($packages.Count -ne 1) { throw 'Expected exactly one NuGet package.' }
+          dotnet nuget push $packages[0].FullName --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate
+          if ($LASTEXITCODE -ne 0) { throw 'NuGet publication failed.' }

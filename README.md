@@ -1,5 +1,11 @@
 # Tedd.Smb
 
+[![NuGet](https://img.shields.io/nuget/v/Tedd.Smb.svg)](https://www.nuget.org/packages/Tedd.Smb)
+[![Build](https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml/badge.svg?branch=main)](https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml)
+
+[Documentation and examples](https://tedd.no/Tedd.SMB3/) ·
+[Source](https://github.com/tedd/Tedd.SMB3)
+
 Managed C# SMB 3.1.1 client and file server for .NET 10 on Windows and Linux.
 The filesystem and command model is adapted from the local
 `D:\source\pdpsrc\bsd\smbd` SMB 2.0.2 implementation. Networking, authentication,
@@ -69,10 +75,19 @@ while retaining encryption support. Ctrl-C stops the foreground host.
 
 ## Client library
 
-Reference `src/Tedd.Smb/Tedd.Smb.csproj`:
+Install the package in a .NET 10 project:
+
+```sh
+dotnet add package Tedd.Smb
+```
+
+Alternatively, reference `src/Tedd.Smb/Tedd.Smb.csproj`.
 
 ```csharp
 using Tedd.Smb;
+
+string password = Environment.GetEnvironmentVariable("TEDD_SMB_PASSWORD")
+    ?? throw new InvalidOperationException("Set TEDD_SMB_PASSWORD.");
 
 await using var client = await SmbClient.ConnectAsync("server", "files", new()
 {
@@ -96,6 +111,91 @@ serialize requests, support cancellation/timeouts, and must be replaced after a
 transport or integrity failure. Authentication uses NTLMv2; credentials must be
 accepted by the target server. `Encrypt=false` still requires signing and honors
 server-required encryption. The client targets SMB 3.1.1 exclusively.
+
+## Host a share from C#
+
+Create the export directory before starting the server. This example explicitly
+enables writes and listens on all IPv4 interfaces; choose the listen address
+and filesystem permissions appropriate for the intended clients.
+
+```csharp
+using System.Net;
+using Tedd.Smb;
+
+string password = Environment.GetEnvironmentVariable("TEDD_SMB_PASSWORD")
+    ?? throw new InvalidOperationException("Set TEDD_SMB_PASSWORD.");
+await using var server = new SmbServer(new()
+{
+    RootPath = args[0],
+    ShareName = "files",
+    UserName = "smbuser",
+    Password = password,
+    ListenAddress = IPAddress.Any,
+    Port = 1445,
+    Writable = true,
+    RequireEncryption = true
+});
+using var stop = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
+await server.RunAsync(stop.Token);
+```
+
+## Mount from Windows
+
+Start the server with `--bind` set to a reachable address, `--share files`,
+`--user smbuser`, and `--port 1445`. Windows 11 24H2 / Windows Server 2025 or
+later supports an alternate TCP port through `New-SmbMapping -TcpPort`.
+Run in PowerShell and supply the server's configured password:
+
+```powershell
+$credential = Get-Credential -UserName smbuser
+New-SmbMapping -LocalPath 'S:' -RemotePath '\\server\files' -TcpPort 1445 `
+  -UserName $credential.UserName -Password $credential.GetNetworkCredential().Password `
+  -RequireIntegrity $true -RequirePrivacy $true -Persistent $false
+Get-ChildItem S:\
+Get-SmbConnection | Where-Object ShareName -eq 'files'
+Remove-SmbMapping -LocalPath 'S:' -Force
+```
+
+Replace `server` with the server hostname or IP address. On clients without
+`-TcpPort`, run the server on port 445 and omit that parameter. File Explorer
+can then open `\\server\files`. The Windows system SMB service commonly owns
+port 445. Windows policies must permit NTLMv2 authentication.
+
+See [New-SmbMapping](https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbmapping?view=windowsserver2025-ps).
+
+## Mount from Linux
+
+Install your distribution's `cifs-utils` package. Use the same account, share,
+and port as the server. The command prompts for the SMB password:
+
+```sh
+sudo mkdir -p /mnt/tedd-smb
+sudo mount -t cifs //server/files /mnt/tedd-smb \
+  -o "username=smbuser,vers=3.1.1,sec=ntlmssp,seal,port=1445,uid=$(id -u),gid=$(id -g)"
+ls -la /mnt/tedd-smb
+findmnt /mnt/tedd-smb
+sudo umount /mnt/tedd-smb
+```
+
+`seal` requests encryption. For a server on port 445, omit `port=1445`.
+Mounting requires root or appropriate mount permissions and kernel SMB 3.1.1
+support. See [mount.cifs](https://www.man7.org/linux/man-pages/man8/mount.cifs.8.html).
+
+## Publishing
+
+The `main` and `deploy` branches build and run the managed protocol, security,
+and file transfer checks on Windows and Linux. The library is packaged with
+its README and a separate symbol package.
+
+NuGet publication runs from `deploy` when the project version changes, when
+that branch is first created, or through an explicit workflow dispatch on
+`deploy`. Configure `NUGET_API_KEY` as a repository secret or in the `nuget`
+environment, scoped to publishing `Tedd.Smb` on NuGet.org.
+
+The Pages workflow publishes `site/` from `deploy`. In repository Settings →
+Pages, select GitHub Actions as the source. The public site is
+[tedd.no/Tedd.SMB3](https://tedd.no/Tedd.SMB3/).
 
 ## Native interoperability tests
 

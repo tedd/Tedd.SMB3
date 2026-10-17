@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7faf9">
+  <meta name="description" content="Managed SMB 3.1.1 client and file server for .NET 10. Use C# APIs or mount encrypted shares from Windows and Linux.">
+  <meta property="og:title" content="Tedd.Smb — SMB 3.1.1 for .NET">
+  <meta property="og:description" content="Connect in C#. Serve a directory. Mount from Windows or Linux.">
+  <meta property="og:type" content="website">
+  <title>Tedd.Smb — SMB 3.1.1 for .NET</title>
+  <link rel="canonical" href="https://tedd.no/Tedd.SMB3/">
+  <link rel="icon" href="assets/smb-icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Tedd.Smb home"><img src="assets/smb-icon.svg" width="34" height="34" alt=""><span>TEDD<span class="brand-slash">/</span>SMB</span></a>
+    <nav aria-label="Primary navigation"><a href="#examples">C# examples</a><a href="#mount">Mount a share</a><a href="#scope">Capabilities</a><a class="nav-cta" href="https://github.com/tedd/Tedd.SMB3">Source ↗</a></nav>
+  </header>
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="hero-grid" aria-hidden="true"></div>
+      <div class="hero-copy">
+        <p class="eyebrow"><span></span> File sharing for .NET</p>
+        <h1>Your files.<br><em>Across the network.</em></h1>
+        <p class="lede">A managed SMB 3.1.1 client and file server for C#. Connect to a share, export a directory, or access files through native Windows and Linux mounts.</p>
+        <div class="hero-badges">
+          <a href="https://www.nuget.org/packages/Tedd.Smb"><img src="https://img.shields.io/nuget/v/Tedd.Smb?logo=nuget&amp;label=NuGet" alt="NuGet package version" height="20"></a>
+          <a href="https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml"><img src="https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml/badge.svg?branch=main" alt="Build and test status" height="20"></a>
+        </div>
+        <div class="hero-actions"><a class="button primary" href="#examples">Start with C# ↓</a><a class="button secondary" href="#mount">Mount a share ↓</a></div>
+        <ul class="hero-checks"><li>.NET 10</li><li>Windows + Linux</li><li>No runtime package dependencies</li></ul>
+      </div>
+      <figure class="index-figure">
+        <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><b>One share · three ways to connect</b><i>3.1.1</i></div>
+        <div class="diagram-panel">
+          <div class="diagram-heading"><span>SMB CLIENTS</span><strong>NTLMv2 authentication</strong></div>
+          <div class="endpoints"><div><b>C#</b><code>SmbClient</code></div><div><b>Windows</b><code>\\server\files</code></div><div><b>Linux</b><code>mount.cifs</code></div></div>
+          <div class="connection"><span>↓</span><p>SMB 3.1.1 · encrypted transport</p><span>↓</span></div>
+          <div class="server-box"><span>MANAGED C# SERVER</span><strong>SmbServer</strong><code>files → your export directory</code></div>
+          <div class="diagram-result"><span>DEFAULT POLICY</span><strong>Encryption required · read-only share</strong></div>
+        </div>
+        <figcaption>Networking, authentication, cryptography, and filesystem access run inside the .NET process.</figcaption>
+      </figure>
+    </section>
+    <section class="fact-strip" aria-label="Library characteristics">
+      <p><strong>SMB 3.1.1</strong><span>SHA-512 preauthentication integrity</span></p>
+      <p><strong>Protected sessions</strong><span>AES-128-GCM / CCM encryption and CMAC signing</span></p>
+      <p><strong>Client + server</strong><span>Async C# APIs and a foreground console host</span></p>
+      <p><strong>Native mounts</strong><span>Windows SMB client and Linux CIFS</span></p>
+    </section>
+    <section class="section-shell examples-section" id="examples">
+      <div class="section-intro"><div><p class="eyebrow">C# examples</p><h2>Connect. Transfer.<br>Serve.</h2></div><p>Install the package in a .NET 10 project. These examples use the <code>Tedd.Smb</code> namespace and read the password from <code>TEDD_SMB_PASSWORD</code>.</p></div>
+      <div class="install-command"><code id="install">dotnet add package Tedd.Smb</code><button type="button" data-copy-target="install">Copy</button></div>
+      <div class="example-grid">
+        <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Read and write a share</b><button type="button" data-copy-target="client">Copy</button></div><pre><code id="client">using Tedd.Smb;
+
+string password = Environment.GetEnvironmentVariable(
+    "TEDD_SMB_PASSWORD") ?? throw new InvalidOperationException(
+    "Set TEDD_SMB_PASSWORD.");
+
+await using var client = await SmbClient.ConnectAsync(
+    "server", "files", new()
+    {
+        UserName = "smbuser",
+        Password = password,
+        Port = 1445,
+        Encrypt = true
+    });
+
+await client.WriteAllBytesAsync("hello.txt",
+    System.Text.Encoding.UTF8.GetBytes("Hello from C#"));
+byte[] data = await client.ReadAllBytesAsync("hello.txt");
+foreach (var entry in await client.ListDirectoryAsync())
+    Console.WriteLine($"{entry.Name}: {entry.Length} bytes");
+await client.MoveAsync("hello.txt", "renamed.txt");
+await client.DeleteAsync("renamed.txt");</code></pre></div>
+        <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Export an existing directory</b><button type="button" data-copy-target="server">Copy</button></div><pre><code id="server">using System.Net;
+using Tedd.Smb;
+
+string password = Environment.GetEnvironmentVariable(
+    "TEDD_SMB_PASSWORD") ?? throw new InvalidOperationException(
+    "Set TEDD_SMB_PASSWORD.");
+
+await using var server = new SmbServer(new()
+{
+    RootPath = args[0], // Existing directory, e.g. /srv/smb/files.
+    ShareName = "files",
+    UserName = "smbuser",
+    Password = password,
+    ListenAddress = IPAddress.Any,
+    Port = 1445,
+    Writable = true,
+    RequireEncryption = true
+});
+
+using var stop = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) =&gt;
+{
+    e.Cancel = true;
+    stop.Cancel();
+};
+await server.RunAsync(stop.Token);</code></pre></div>
+        <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Read a large file with bounded memory</b><button type="button" data-copy-target="stream">Copy</button></div><pre><code id="stream">// Use a connected SmbClient from the first example.
+await using var remote = await client.OpenAsync("large.bin");
+await using var local = File.Create("download.bin");
+byte[] buffer = new byte[64 * 1024];
+long offset = 0;
+int count;
+while ((count = await remote.ReadAsync(buffer, offset)) &gt; 0)
+{
+    await local.WriteAsync(buffer.AsMemory(0, count));
+    offset += count;
+}</code></pre></div>
+      </div>
+      <p class="model-note">The server example exposes a writable share on all IPv4 interfaces. Choose a specific listen address and restrict filesystem and network access to the intended clients. The defaults are loopback, port 445, read-only, and encryption required.</p>
+    </section>
+    <section class="section-shell host-section" id="host">
+      <div class="section-intro"><div><p class="eyebrow">Console host</p><h2>A directory becomes<br>a network share.</h2></div><p>Clone the source and build the host with the .NET 10 SDK. Create the export directory first, set a password in the process environment, then start the foreground server.</p></div>
+      <div class="example-grid">
+        <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Windows · PowerShell</b><button type="button" data-copy-target="host-windows">Copy</button></div><pre><code id="host-windows"># From the cloned repository.
+dotnet build Tedd.Smb.slnx -c Release
+New-Item -ItemType Directory -Force D:\Exports\files
+$credential = Get-Credential -UserName smbuser
+$env:TEDD_SMB_PASSWORD = $credential.GetNetworkCredential().Password
+dotnet src/Tedd.Smb.Host/bin/Release/net10.0/Tedd.Smb.Host.dll serve `
+  --root D:\Exports\files --share files --user smbuser `
+  --bind 0.0.0.0 --port 1445 --writable</code></pre></div>
+        <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Linux · Bash</b><button type="button" data-copy-target="host-linux">Copy</button></div><pre><code id="host-linux"># From the cloned repository.
+dotnet build Tedd.Smb.slnx -c Release
+mkdir -p "$HOME/smb-export"
+read -rsp 'SMB password: ' TEDD_SMB_PASSWORD; echo
+export TEDD_SMB_PASSWORD
+dotnet src/Tedd.Smb.Host/bin/Release/net10.0/Tedd.Smb.Host.dll serve \
+  --root "$HOME/smb-export" --share files --user smbuser \
+  --bind 0.0.0.0 --port 1445 --writable</code></pre></div>
+      </div>
+      <p class="model-note">Omit <code>--writable</code> for a read-only export. Ctrl-C stops the host. Port 1445 avoids the system SMB listener; port 445 supports conventional UNC access and may require elevated binding privileges on Linux.</p>
+    </section>
+    <section class="section-shell mount-section" id="mount">
+      <div class="section-intro"><div><p class="eyebrow">Native filesystem access</p><h2>Mount once.<br>Use ordinary files.</h2></div><p>Start the server above, replace <code>server</code> with its hostname or IP address, and use the same <code>smbuser</code> password. Both examples request encryption.</p></div>
+      <div class="example-grid">
+        <article class="mount-card"><h3>Windows</h3><p>Alternate TCP ports require Windows 11 24H2 / Windows Server 2025 or later with <code>New-SmbMapping -TcpPort</code>. Use port 445 on clients without that parameter.</p><div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>PowerShell · map S:</b><button type="button" data-copy-target="mount-windows">Copy</button></div><pre><code id="mount-windows">$credential = Get-Credential -UserName smbuser
+New-SmbMapping -LocalPath 'S:' `
+  -RemotePath '\\server\files' -TcpPort 1445 `
+  -UserName $credential.UserName `
+  -Password $credential.GetNetworkCredential().Password `
+  -RequireIntegrity $true -RequirePrivacy $true `
+  -Persistent $false
+
+Get-ChildItem S:\
+Get-SmbConnection | Where-Object ShareName -eq 'files'
+
+# Disconnect when finished.
+Remove-SmbMapping -LocalPath 'S:' -Force</code></pre></div><p>For a server listening on 445, omit <code>-TcpPort 1445</code>. File Explorer can then use <code>\\server\files</code>. Windows policies must permit NTLMv2 authentication.</p></article>
+        <article class="mount-card"><h3>Linux</h3><p>Install your distribution’s <code>cifs-utils</code> package. Mounting requires root or the appropriate mount permissions and kernel SMB 3.1.1 support.</p><div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Shell · mount CIFS</b><button type="button" data-copy-target="mount-linux">Copy</button></div><pre><code id="mount-linux">sudo mkdir -p /mnt/tedd-smb
+# Prompts for the SMB password; it is not in shell history.
+sudo mount -t cifs //server/files /mnt/tedd-smb \
+  -o "username=smbuser,vers=3.1.1,sec=ntlmssp,seal,port=1445,uid=$(id -u),gid=$(id -g)"
+
+ls -la /mnt/tedd-smb
+findmnt /mnt/tedd-smb
+
+# Unmount when finished.
+sudo umount /mnt/tedd-smb</code></pre></div><p><code>seal</code> requests SMB encryption. For port 445, omit <code>port=1445</code>. Match local mount permissions to the users who need access.</p></article>
+      </div>
+      <p class="model-note">References: <a href="https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbmapping?view=windowsserver2025-ps">Microsoft New-SmbMapping</a> · <a href="https://www.man7.org/linux/man-pages/man8/mount.cifs.8.html">mount.cifs manual</a>.</p>
+    </section>
+    <section class="section-shell scope-section" id="scope">
+      <div class="section-intro"><div><p class="eyebrow">Capabilities &amp; operating limits</p><h2>Focused on<br>file transfer.</h2></div><p>One configured account, one disk share, and IPC$/srvsvc share enumeration. Use it for managed file sharing where these protocol capabilities fit your workload.</p></div>
+      <div class="capability-grid">
+        <article><span class="step">01 / Files</span><h3>Read, write, manage</h3><p>Create and list directories. Read, write, flush, truncate, rename, and delete files. Use explicit 64-bit offsets and query or update timestamps and attributes.</p></article>
+        <article><span class="step">02 / Sessions</span><h3>Bounded connections</h3><p>64 KiB transfers, 32 credits, 32 compound commands, 64 trees and 1,024 handles per connection; 32 connections by default. Requests on each connection execute in order.</p></article>
+        <article><span class="step">03 / Security</span><h3>Trusted export directory</h3><p>Traversal and symbolic links are rejected. Protect the export from untrusted local directory replacement and run with filesystem permissions limited to the intended export.</p></article>
+      </div>
+      <div class="scope-note"><h3>Deployment considerations</h3><p>Authentication uses NTLMv2. Kerberos/domain integration, guest access, leases/oplocks, byte-range locks, durable handles, multichannel, change notifications, alternate streams, Windows ACL management, and compression are outside this implementation. Sessions and handles cannot be recovered after reconnect.</p><p>Linux logical creation/change timestamps and hidden/archive attributes use <code>user.tedd.smb3.*</code> extended attributes. The backing filesystem and backups must preserve them. Independent server instances need separate exports.</p></div>
+    </section>
+  </main>
+  <footer><a class="brand" href="#top">TEDD<span class="brand-slash">/</span>SMB</a><span>Managed SMB 3.1.1 for .NET 10</span><div><a href="https://github.com/tedd/Tedd.SMB3">GitHub ↗</a><a href="https://www.nuget.org/packages/Tedd.Smb">NuGet ↗</a></div></footer>
+  <p class="sr-only" id="copy-status" role="status" aria-live="polite"></p>
+</body>
+</html>
