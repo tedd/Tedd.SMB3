@@ -1,0 +1,158 @@
+{
+  "status": "passed",
+  "tested_library_sha256": "4203C16128A391ACC0C01ACB80404FE7D19962171DD6A7B46AFB7D144EFF873F",
+  "environment": {
+    "windows": "10.0.26200.0",
+    "linux": "Ubuntu 24.04 WSL2 / 6.18.33.2-microsoft-standard-WSL2",
+    "sdk": "10.0.402",
+    "windows_runtime": "10.0.13",
+    "linux_runtime": "10.0.12",
+    "samba": "4.19.5",
+    "smbprotocol": "1.17.0",
+    "impacket": "0.13.1"
+  },
+  "managed_suites": {
+    "windows": "passed",
+    "linux_posix_filesystem": "passed",
+    "checks": [
+      "RFC1320 MD4 and NT hash vectors",
+      "NIST AES-CMAC vectors",
+      "RC4 key exchange vector",
+      "AEAD and signing tamper rejection",
+      "signed and encrypted replay rejection",
+      "unsigned request rejection",
+      "unaligned compound rejection",
+      "CANCEL without response",
+      "signed and encrypted related CREATE/WRITE/CLOSE",
+      "Unicode multi-frame transfers",
+      "directory metadata and pagination",
+      "rename, truncation, offset write and flush",
+      "incorrect password rejection",
+      "path traversal rejection",
+      "share-access conflict rejection",
+      "read-only enforcement",
+      "Linux symlink rejection",
+      "persistent logical timestamps and hidden/archive attributes"
+    ]
+  },
+  "matrix": [
+    {
+      "client": "Windows native SMB",
+      "server": "C# on Linux",
+      "mode": "signed",
+      "result": "passed",
+      "protocol": "3.1.1",
+      "native_flags": "0x10"
+    },
+    {
+      "client": "Windows native SMB",
+      "server": "C# on Linux",
+      "mode": "encrypted",
+      "result": "passed",
+      "protocol": "3.1.1",
+      "native_flags": "0x18"
+    },
+    {
+      "client": "Linux kernel CIFS",
+      "server": "C# on Linux",
+      "mode": "signed",
+      "result": "passed",
+      "protocol": "3.1.1",
+      "mount_security": "ntlmsspi"
+    },
+    {
+      "client": "Linux kernel CIFS",
+      "server": "C# on Linux",
+      "mode": "encrypted",
+      "result": "passed",
+      "protocol": "3.1.1",
+      "mount_security": "seal"
+    },
+    {
+      "client": "Linux kernel CIFS",
+      "server": "C# on Windows",
+      "mode": "signed",
+      "result": "passed",
+      "protocol": "3.1.1",
+      "mount_security": "ntlmsspi"
+    },
+    {
+      "client": "Linux kernel CIFS",
+      "server": "C# on Windows",
+      "mode": "encrypted",
+      "result": "passed",
+      "protocol": "3.1.1",
+      "mount_security": "seal"
+    },
+    {
+      "client": "C# on Windows",
+      "server": "Samba",
+      "mode": "signed",
+      "result": "passed"
+    },
+    {
+      "client": "C# on Windows",
+      "server": "Samba",
+      "mode": "encrypted",
+      "result": "passed"
+    },
+    {
+      "client": "C# on Linux",
+      "server": "Samba",
+      "mode": "signed",
+      "result": "passed"
+    },
+    {
+      "client": "C# on Linux",
+      "server": "Samba",
+      "mode": "encrypted",
+      "result": "passed"
+    },
+    {
+      "client": "smbprotocol",
+      "server": "C# on Linux",
+      "mode": "signed",
+      "result": "passed"
+    },
+    {
+      "client": "smbprotocol",
+      "server": "C# on Linux",
+      "mode": "encrypted",
+      "result": "passed"
+    },
+    {
+      "client": "Impacket srvsvc",
+      "server": "C# on Linux",
+      "mode": "signed",
+      "result": "passed",
+      "shares": [
+        "files",
+        "IPC$"
+      ]
+    },
+    {
+      "client": "Impacket srvsvc",
+      "server": "C# on Linux",
+      "mode": "encrypted",
+      "result": "passed",
+      "shares": [
+        "files",
+        "IPC$"
+      ]
+    }
+  ],
+  "native_round_trip": [
+    "Unicode names",
+    "directory listing",
+    "SHA256-verified file transfers",
+    "rename",
+    "truncate",
+    "offset write",
+    "flush/fsync",
+    "last-write timestamp",
+    "delete"
+  ],
+  "windows_output": "Windows native protocol 3.1.1 flags=0x10\r\nPASS Windows native SMB mount: Unicode, listing, create/read/write, SHA256, rename, truncate, offset write, flush, timestamps, delete\r\nWindows native protocol 3.1.1 flags=0x18\r\nPASS Windows native SMB mount: Unicode, listing, create/read/write, SHA256, rename, truncate, offset write, flush, timestamps, delete\r\nPASS multi-frame Unicode round trip\r\nPASS directory metadata\r\nPASS rename removes old name\r\nPASS truncate and offset write\r\nPASS 172.26.156.2:1447 SMB 3.1.1 encrypted=False\r\nPASS multi-frame Unicode round trip\r\nPASS directory metadata\r\nPASS rename removes old name\r\nPASS truncate and offset write\r\nPASS 172.26.156.2:1447 SMB 3.1.1 encrypted=True",
+  "linux_output": "PASS native mount /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux: Unicode, listing, create/read/write, SHA256=3aca76ad4fa5b0c5b8c8b18ccd8900ceac7d2747537fd4a3b1c38b9344b71120, rename, truncate, sparse offset, flush, timestamps, delete\n//127.0.0.1/files /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux cifs rw,relatime,vers=3.1.1,sec=ntlmsspi,cache=none,upcall_target=app,username=smbtest,uid=0,noforceuid,gid=0,noforcegid,addr=127.0.0.1,file_mode=0755,dir_mode=0755,soft,nounix,serverino,mapposix,reparse=nfs,nativesocket,symlink=native,rsize=65536,wsize=65536,bsize=1048576,echo_interval=60,actimeo=1,closetimeo=1 0 0\nPASS native mount /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux: Unicode, listing, create/read/write, SHA256=3aca76ad4fa5b0c5b8c8b18ccd8900ceac7d2747537fd4a3b1c38b9344b71120, rename, truncate, sparse offset, flush, timestamps, delete\n//127.0.0.1/files /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux cifs rw,relatime,vers=3.1.1,sec=ntlmssp,cache=none,upcall_target=app,username=smbtest,uid=0,noforceuid,gid=0,noforcegid,addr=127.0.0.1,file_mode=0755,dir_mode=0755,seal,soft,nounix,serverino,mapposix,reparse=nfs,nativesocket,symlink=native,rsize=65536,wsize=65536,bsize=1048576,echo_interval=60,actimeo=1,closetimeo=1 0 0\nPASS native mount /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux: Unicode, listing, create/read/write, SHA256=3aca76ad4fa5b0c5b8c8b18ccd8900ceac7d2747537fd4a3b1c38b9344b71120, rename, truncate, sparse offset, flush, timestamps, delete\n//172.26.144.1/files /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux cifs rw,relatime,vers=3.1.1,sec=ntlmsspi,cache=none,upcall_target=app,username=smbtest,uid=0,noforceuid,gid=0,noforcegid,addr=172.26.144.1,file_mode=0755,dir_mode=0755,soft,nounix,serverino,mapposix,reparse=nfs,nativesocket,symlink=native,rsize=65536,wsize=65536,bsize=1048576,echo_interval=60,actimeo=1,closetimeo=1 0 0\nPASS native mount /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux: Unicode, listing, create/read/write, SHA256=3aca76ad4fa5b0c5b8c8b18ccd8900ceac7d2747537fd4a3b1c38b9344b71120, rename, truncate, sparse offset, flush, timestamps, delete\n//172.26.144.1/files /mnt/d/Workspaces/AI/tedd-smb3-port/mount-linux cifs rw,relatime,vers=3.1.1,sec=ntlmssp,cache=none,upcall_target=app,username=smbtest,uid=0,noforceuid,gid=0,noforcegid,addr=172.26.144.1,file_mode=0755,dir_mode=0755,seal,soft,nounix,serverino,mapposix,reparse=nfs,nativesocket,symlink=native,rsize=65536,wsize=65536,bsize=1048576,echo_interval=60,actimeo=1,closetimeo=1 0 0\nPASS independent smbprotocol SMB 3.1.1 encrypted=False: Unicode file round trip, listing, rename, delete\nPASS independent smbprotocol SMB 3.1.1 encrypted=True: Unicode file round trip, listing, rename, delete\nPASS independent Impacket srvsvc share enumeration: ['files', 'IPC$']\nPASS independent Impacket srvsvc share enumeration: ['files', 'IPC$']\nPASS multi-frame Unicode round trip\nPASS directory metadata\nPASS rename removes old name\nPASS truncate and offset write\nPASS 127.0.0.1:1447 SMB 3.1.1 encrypted=False\nPASS multi-frame Unicode round trip\nPASS directory metadata\nPASS rename removes old name\nPASS truncate and offset write\nPASS 127.0.0.1:1447 SMB 3.1.1 encrypted=True",
+  "limits": "File-transfer interoperability evidence; not a complete MS-SMB2 conformance certification. Protocol and filesystem scope is described in README.md."
+}
