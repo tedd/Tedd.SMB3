@@ -4,12 +4,17 @@ using System.IO.Enumeration;
 
 namespace Tedd.Smb;
 
+/// <summary>Connection-owned file or pipe handle and its enumeration/delete state.</summary>
 internal sealed class OpenFile : IDisposable
 {
     internal required string Path;
     internal required byte[] Id;
-    internal required uint Tree, Access, Share;
-    internal bool Directory, DeletePending, Pipe;
+    internal required uint Tree;
+    internal required uint Access;
+    internal required uint Share;
+    internal bool Directory;
+    internal bool DeletePending;
+    internal bool Pipe;
     internal string ObjectId = "";
     internal string? DeletePath;
     internal FileStream? Stream;
@@ -18,160 +23,331 @@ internal sealed class OpenFile : IDisposable
     internal int EntryIndex;
     internal byte[] Rpc = [];
     internal readonly RpcService Endpoint = new();
-    public void Dispose() { Entries?.Dispose(); Stream?.Dispose(); }
+    public void Dispose()
+    {
+        Entries?.Dispose();
+        Stream?.Dispose();
+    }
 }
 
-internal sealed class FileService : IDisposable
+/// <summary>Translates validated SMB commands into filesystem and srvsvc operations.</summary>
+/// <remarks>The server's async file gate protects cross-connection sharing invariants.</remarks>
+internal sealed class FileService : IAsyncDisposable
 {
     private readonly SmbServer server;
-    private readonly Dictionary<string, OpenFile> handles = [];
+    private readonly Dictionary<FileHandleId, OpenFile> handles = [];
     internal byte[]? RelatedId;
-    private const uint ReadMask = SmbLimits.ReadSharingAccess, WriteMask = SmbLimits.WriteSharingAccess, DeleteMask = FileAccessMask.Delete;
+    private const uint ReadMask = SmbLimits.ReadSharingAccess;
+    private const uint WriteMask = SmbLimits.WriteSharingAccess;
+    private const uint DeleteMask = FileAccessMask.Delete;
     internal FileService(SmbServer server) => this.server = server;
-    internal byte[] Dispatch(int cmd, byte[] r, uint tree, bool pipe)
+    internal async ValueTask<byte[]> DispatchAsync(int cmd, ReadOnlyMemory<byte> request, uint tree, bool pipe, CancellationToken cancellationToken)
     {
-        lock (server.FileGate)
+        await server.FileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
             return cmd switch
             {
-                Smb2Command.Create => Create(r, tree, pipe),
-                Smb2Command.Close => Close(r, tree),
-                Smb2Command.Flush => Flush(r, tree),
-                Smb2Command.Read => Read(r, tree),
-                Smb2Command.Write => Write(r, tree),
-                Smb2Command.Ioctl => Ioctl(r, tree),
-                Smb2Command.QueryDirectory => QueryDirectory(r, tree),
-                Smb2Command.QueryInfo => QueryInfo(r, tree),
-                Smb2Command.SetInfo => SetInfo(r, tree),
+                Smb2Command.Create => Create(request.Span, tree, pipe),
+                Smb2Command.Close => Close(request.Span, tree),
+                Smb2Command.Flush => Flush(request.Span, tree),
+                Smb2Command.Read => await ReadAsync(request, tree, cancellationToken).ConfigureAwait(false),
+                Smb2Command.Write => await WriteAsync(request, tree, cancellationToken).ConfigureAwait(false),
+                Smb2Command.Ioctl => Ioctl(request.Span, tree),
+                Smb2Command.QueryDirectory => QueryDirectory(request.Span, tree),
+                Smb2Command.QueryInfo => QueryInfo(request.Span, tree),
+                Smb2Command.SetInfo => SetInfo(request.Span, tree),
                 _ => throw new SmbException(NtStatus.NotSupported)
             };
         }
+        finally
+        {
+            server.FileGate.Release();
+        }
     }
-    private static void Structure(byte[] r, int size, int minimum)
-    { if (r.Length < minimum || Wire.ReadUInt16LittleEndian(r, Smb2Header.Size) != size) throw new SmbException(NtStatus.InvalidParameter); }
-    private OpenFile Find(byte[] r, int p, uint tree)
+
+    private static void ValidateStructure(ReadOnlySpan<byte> r, int size, int minimum)
     {
-        var id = Wire.Slice(r, p, Smb2FileId.Size).ToArray();
-        if (id.All(x => x == Smb2FileId.RelatedOperationByte)) id = RelatedId ?? throw new SmbException(NtStatus.InvalidHandle);
-        if (!handles.TryGetValue(Convert.ToHexString(id), out var h) || h.Tree != tree) throw new SmbException(NtStatus.InvalidHandle);
+        if (r.Length < minimum || Wire.ReadUInt16LittleEndian(r, Smb2Header.Size) != size)
+            throw new SmbException(NtStatus.InvalidParameter);
+    }
+
+    private OpenFile FindHandle(ReadOnlySpan<byte> r, int p, uint tree)
+    {
+        // All-one file IDs inherit the preceding CREATE only in related compounds.
+        var id = Wire.Slice(r, p, Smb2FileId.Size);
+        if (id.IndexOfAnyExcept(Smb2FileId.RelatedOperationByte) < 0)
+            id = RelatedId ?? throw new SmbException(NtStatus.InvalidHandle);
+        if (!handles.TryGetValue(FileHandleId.Read(id), out var h) || h.Tree != tree)
+            throw new SmbException(NtStatus.InvalidHandle);
         return h;
     }
-    private uint Expand(uint access)
+
+    private uint ExpandAccess(uint access)
     {
-        if ((access & SmbLimits.UnsupportedSecurityAccess) != 0) throw new SmbException(NtStatus.AccessDenied);
-        if ((access & FileAccessMask.GenericRead) != 0) access |= FileAccessMask.FileGenericRead;
-        if ((access & FileAccessMask.GenericWrite) != 0) access |= FileAccessMask.FileGenericWrite;
-        if ((access & FileAccessMask.GenericExecute) != 0) access |= FileAccessMask.FileGenericExecute;
-        if ((access & (FileAccessMask.GenericAll | FileAccessMask.MaximumAllowed)) != 0) access |= server.Options.Writable ? SmbLimits.SupportedFileAccess : SmbLimits.ReadAccess;
+        if ((access & SmbLimits.UnsupportedSecurityAccess) != 0)
+            throw new SmbException(NtStatus.AccessDenied);
+        if ((access & FileAccessMask.GenericRead) != 0)
+            access |= FileAccessMask.FileGenericRead;
+        if ((access & FileAccessMask.GenericWrite) != 0)
+            access |= FileAccessMask.FileGenericWrite;
+        if ((access & FileAccessMask.GenericExecute) != 0)
+            access |= FileAccessMask.FileGenericExecute;
+        if ((access & (FileAccessMask.GenericAll | FileAccessMask.MaximumAllowed)) != 0)
+            access |= server.Options.Writable ? SmbLimits.SupportedFileAccess : SmbLimits.ReadAccess;
         return access & SmbLimits.SupportedFileAccess;
     }
-    private static void Require(OpenFile h, uint mask) { if ((h.Access & mask) == 0) throw new SmbException(NtStatus.AccessDenied); }
-    private void Writable() { if (!server.Options.Writable) throw new SmbException(NtStatus.AccessDenied); }
-    private string Resolve(string name)
+
+    private static void RequireAccess(OpenFile h, uint mask)
     {
-        if (name.IndexOf('\0') >= 0 || name.StartsWith('\\') || name.StartsWith('/') || name.Contains(':')) throw new SmbException(NtStatus.AccessDenied);
-        var parts = name.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries); string path = server.Options.RootPath;
+        if ((h.Access & mask) == 0)
+            throw new SmbException(NtStatus.AccessDenied);
+    }
+
+    private void EnsureWritable()
+    {
+        if (!server.Options.Writable)
+            throw new SmbException(NtStatus.AccessDenied);
+    }
+
+    private string ResolvePath(string name)
+    {
+        // Resolve components case-insensitively and reject traversal, devices and links.
+        // The export must not be concurrently modified by untrusted local processes.
+        if (name.IndexOf('\0') >= 0 || name.StartsWith('\\') || name.StartsWith('/') || name.Contains(':'))
+            throw new SmbException(NtStatus.AccessDenied);
+        var parts = name.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string path = server.Options.RootPath;
         foreach (string part in parts)
         {
-            if (part is "." or ".." || part.EndsWith(' ') || part.EndsWith('.')) throw new SmbException(NtStatus.AccessDenied);
-            if (part.Any(c => c < 32 || "<>\"|?*".Contains(c))) throw new SmbException(NtStatus.AccessDenied);
-            string device = part.Split('.')[0].TrimEnd(' ').ToUpperInvariant();
-            if (device is "CON" or "PRN" or "AUX" or "NUL" || (device.Length == 4 && (device.StartsWith("COM", StringComparison.Ordinal) || device.StartsWith("LPT", StringComparison.Ordinal)) && "123456789ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¹ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³".Contains(device[3]))) throw new SmbException(NtStatus.AccessDenied);
+            if (part is "." or ".." || part.EndsWith(' ') || part.EndsWith('.'))
+                throw new SmbException(NtStatus.AccessDenied);
+            if (part.Any(c => c < 32 || "<>\"|?*".Contains(c)))
+                throw new SmbException(NtStatus.AccessDenied);
+            if (IsReservedDevice(part))
+                throw new SmbException(NtStatus.AccessDenied);
             if (Directory.Exists(path))
             {
-                var matches = Directory.EnumerateFileSystemEntries(path).Where(x => Path.GetFileName(x).Equals(part, StringComparison.OrdinalIgnoreCase)).ToArray();
-                string? exact = matches.FirstOrDefault(x => Path.GetFileName(x) == part);
-                if (exact != null) path = exact;
-                else if (matches.Length == 1) path = matches[0];
-                else if (matches.Length > 1) throw new SmbException(NtStatus.ObjectNameCollision);
-                else path = Path.Combine(path, part);
+                // An exact spelling wins; otherwise a case-insensitive match must be unique.
+                string? exact = null, match = null;
+                int matches = 0;
+                foreach (string entry in Directory.EnumerateFileSystemEntries(path))
+                {
+                    var entryName = Path.GetFileName(entry.AsSpan());
+                    if (!entryName.Equals(part, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    matches++;
+                    match = entry;
+                    if (entryName.SequenceEqual(part))
+                    {
+                        exact = entry;
+                        break;
+                    }
+                }
+
+                if (exact != null)
+                    path = exact;
+                else if (matches == 1)
+                    path = match!;
+                else if (matches > 1)
+                    throw new SmbException(NtStatus.ObjectNameCollision);
+                else
+                    path = Path.Combine(path, part);
             }
-            else path = Path.Combine(path, part);
-            try { if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) throw new SmbException(NtStatus.AccessDenied); }
-            catch (FileNotFoundException) { }
-            catch (DirectoryNotFoundException) { }
+            else
+                path = Path.Combine(path, part);
+            try
+            {
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                    throw new SmbException(NtStatus.AccessDenied);
+            }
+            catch (FileNotFoundException)
+            {
+            }
+            catch (DirectoryNotFoundException)
+            {
+            }
         }
+
         return path;
     }
-    private byte[] Create(byte[] r, uint tree, bool pipe)
+
+    private static bool IsReservedDevice(ReadOnlySpan<char> component)
     {
-        Structure(r, Smb2CreateRequest.StructureSize, Smb2Header.Size + Smb2CreateRequest.FixedSize); if (handles.Count >= SmbLimits.MaxHandles) throw new SmbException(NtStatus.TooManyOpenedFiles);
-        uint access = Expand(Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.DesiredAccessOffset)), share = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.ShareAccessOffset), disposition = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.CreateDispositionOffset), options = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.CreateOptionsOffset);
-        if (share > FileShareAccess.All || disposition > Smb2CreateDisposition.OverwriteIf || (options & Smb2CreateOptions.ConflictingDirectoryOptions) == Smb2CreateOptions.ConflictingDirectoryOptions) throw new SmbException(NtStatus.InvalidParameter);
+        int extension = component.IndexOf('.');
+        var basename = (extension < 0 ? component : component[..extension]).TrimEnd(' ');
+        if (basename.Equals("CON", StringComparison.OrdinalIgnoreCase) || basename.Equals("PRN", StringComparison.OrdinalIgnoreCase) || basename.Equals("AUX", StringComparison.OrdinalIgnoreCase) || basename.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+            return true;
+        // Windows also reserves the superscript digits one, two and three for devices.
+        return basename.Length == 4 && (basename.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || basename.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) && "123456789\u00b9\u00b2\u00b3".Contains(basename[3]);
+    }
+
+    private byte[] Create(ReadOnlySpan<byte> r, uint tree, bool pipe)
+    {
+        ValidateStructure(r, Smb2CreateRequest.StructureSize, Smb2Header.Size + Smb2CreateRequest.FixedSize);
+        if (handles.Count >= SmbLimits.MaxHandles)
+            throw new SmbException(NtStatus.TooManyOpenedFiles);
+        uint access = ExpandAccess(Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.DesiredAccessOffset)), share = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.ShareAccessOffset), disposition = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.CreateDispositionOffset), options = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.CreateOptionsOffset);
+        if (share > FileShareAccess.All || disposition > Smb2CreateDisposition.OverwriteIf || (options & Smb2CreateOptions.ConflictingDirectoryOptions) == Smb2CreateOptions.ConflictingDirectoryOptions)
+            throw new SmbException(NtStatus.InvalidParameter);
         int o = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.NameOffsetFieldOffset), n = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.NameLengthOffset);
-        if (n != 0 && o < Smb2Header.Size + Smb2CreateRequest.FixedSize) throw new SmbException(NtStatus.InvalidParameter);
+        if (n != 0 && o < Smb2Header.Size + Smb2CreateRequest.FixedSize)
+            throw new SmbException(NtStatus.InvalidParameter);
         string name = n == 0 ? "" : Wire.Text(Wire.Slice(r, o, n));
         uint ctxOffset = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.CreateContextsOffsetFieldOffset), ctxLength = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.CreateContextsLengthOffset);
         var contextNames = new HashSet<string>();
         if (ctxLength != 0)
         {
             int start = checked((int)ctxOffset), end = checked(start + (int)ctxLength);
-            if (start < Smb2Header.Size + Smb2CreateRequest.FixedSize || (start & 7) != 0) throw new SmbException(NtStatus.InvalidParameter);
+            if (start < Smb2Header.Size + Smb2CreateRequest.FixedSize || (start & 7) != 0)
+                throw new SmbException(NtStatus.InvalidParameter);
             _ = Wire.Slice(r, start, checked((int)ctxLength));
             for (int p = start, count = 0; ; count++)
             {
-                if (count == SmbLimits.MaxCreateContexts) throw new SmbException(NtStatus.InvalidParameter);
-                var header = Wire.Slice(r, p, Smb2CreateContext.HeaderSize); int next = checked((int)Wire.ReadUInt32LittleEndian(header, Smb2CreateContext.NextOffset));
+                if (count == SmbLimits.MaxCreateContexts)
+                    throw new SmbException(NtStatus.InvalidParameter);
+                var header = Wire.Slice(r, p, Smb2CreateContext.HeaderSize);
+                int next = checked((int)Wire.ReadUInt32LittleEndian(header, Smb2CreateContext.NextOffset));
                 int size = next == 0 ? end - p : next;
-                if (size < Smb2CreateContext.HeaderSize || size > end - p || (next != 0 && (next & 7) != 0)) throw new SmbException(NtStatus.InvalidParameter);
-                var context = Wire.Slice(r, p, size); int nameAt = Wire.ReadUInt16LittleEndian(header, Smb2CreateContext.NameOffsetFieldOffset), dataAt = Wire.ReadUInt16LittleEndian(header, Smb2CreateContext.DataOffsetFieldOffset), dataLength = checked((int)Wire.ReadUInt32LittleEndian(header, Smb2CreateContext.DataLengthOffset));
-                if (nameAt < Smb2CreateContext.HeaderSize || (dataLength != 0 && dataAt < Smb2CreateContext.HeaderSize)) throw new SmbException(NtStatus.InvalidParameter);
+                if (size < Smb2CreateContext.HeaderSize || size > end - p || (next != 0 && (next & 7) != 0))
+                    throw new SmbException(NtStatus.InvalidParameter);
+                var context = Wire.Slice(r, p, size);
+                int nameAt = Wire.ReadUInt16LittleEndian(header, Smb2CreateContext.NameOffsetFieldOffset), dataAt = Wire.ReadUInt16LittleEndian(header, Smb2CreateContext.DataOffsetFieldOffset), dataLength = checked((int)Wire.ReadUInt32LittleEndian(header, Smb2CreateContext.DataLengthOffset));
+                if (nameAt < Smb2CreateContext.HeaderSize || (dataLength != 0 && dataAt < Smb2CreateContext.HeaderSize))
+                    throw new SmbException(NtStatus.InvalidParameter);
                 string contextName = Encoding.ASCII.GetString(Wire.Slice(context, nameAt, Wire.ReadUInt16LittleEndian(header, Smb2CreateContext.NameLengthOffset)));
                 _ = Wire.Slice(context, dataLength == 0 ? 0 : dataAt, dataLength);
-                if (!contextNames.Add(contextName)) throw new SmbException(NtStatus.InvalidParameter);
-                if (contextName == Smb2CreateContextName.EaBuffer && dataLength != 0) throw new SmbException(NtStatus.EasNotSupported);
-                if (contextName == Smb2CreateContextName.TimewarpToken) throw new SmbException(NtStatus.NotSupported);
-                if (next == 0) break; p += next;
+                if (!contextNames.Add(contextName))
+                    throw new SmbException(NtStatus.InvalidParameter);
+                if (contextName == Smb2CreateContextName.EaBuffer && dataLength != 0)
+                    throw new SmbException(NtStatus.EasNotSupported);
+                if (contextName == Smb2CreateContextName.TimewarpToken)
+                    throw new SmbException(NtStatus.NotSupported);
+                if (next == 0)
+                    break;
+                p += next;
             }
         }
+
         if (pipe)
         {
-            if (!name.Equals("srvsvc", StringComparison.OrdinalIgnoreCase)) throw new SmbException(NtStatus.ObjectNameNotFound);
-            var ph = new OpenFile { Path = name, Id = RandomNumberGenerator.GetBytes(Smb2FileId.Size), Tree = tree, Access = access, Share = share, Pipe = true };
-            handles.Add(Convert.ToHexString(ph.Id), ph); server.OpenFiles.Add(ph); RelatedId = ph.Id;
+            if (!name.Equals("srvsvc", StringComparison.OrdinalIgnoreCase))
+                throw new SmbException(NtStatus.ObjectNameNotFound);
+            var ph = new OpenFile
+            {
+                Path = name,
+                Id = RandomNumberGenerator.GetBytes(Smb2FileId.Size),
+                Tree = tree,
+                Access = access,
+                Share = share,
+                Pipe = true
+            };
+            handles.Add(FileHandleId.Read(ph.Id), ph);
+            server.OpenFiles.Add(ph);
+            RelatedId = ph.Id;
             var pb = new byte[Smb2CreateResponse.FixedSize];
             Wire.WriteUInt16LittleEndian(pb, 0, Smb2CreateResponse.StructureSize);
-            Wire.WriteUInt32LittleEndian(pb, Smb2CreateResponse.CreateActionOffset, Smb2CreateAction.Opened); ph.Id.CopyTo(pb, Smb2CreateResponse.FileIdOffset); return pb;
+            Wire.WriteUInt32LittleEndian(pb, Smb2CreateResponse.CreateActionOffset, Smb2CreateAction.Opened);
+            ph.Id.CopyTo(pb, Smb2CreateResponse.FileIdOffset);
+            return pb;
         }
-        if ((options & Smb2CreateOptions.OpenByFileId) != 0) throw new SmbException(NtStatus.NotSupported);
-        if ((Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.FileAttributesOffset) & ~SmbLimits.SupportedFileAttributes) != 0) throw new SmbException(NtStatus.NotSupported);
-        if (!server.Options.Writable && ((access & SmbLimits.MutatingAccess) != 0 || disposition is not (Smb2CreateDisposition.Open or Smb2CreateDisposition.OpenIf) || (options & Smb2CreateOptions.DeleteOnClose) != 0)) throw new SmbException(NtStatus.AccessDenied);
-        string path = Resolve(name); bool exists = File.Exists(path) || Directory.Exists(path), isDir = Directory.Exists(path);
+
+        if ((options & Smb2CreateOptions.OpenByFileId) != 0)
+            throw new SmbException(NtStatus.NotSupported);
+        if ((Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.FileAttributesOffset) & ~SmbLimits.SupportedFileAttributes) != 0)
+            throw new SmbException(NtStatus.NotSupported);
+        if (!server.Options.Writable && ((access & SmbLimits.MutatingAccess) != 0 || disposition is not (Smb2CreateDisposition.Open or Smb2CreateDisposition.OpenIf) || (options & Smb2CreateOptions.DeleteOnClose) != 0))
+            throw new SmbException(NtStatus.AccessDenied);
+        string path = ResolvePath(name);
+        bool exists = File.Exists(path) || Directory.Exists(path), isDir = Directory.Exists(path);
         string objectId = exists ? Convert.ToHexString(FileMetadata.Identity(path)) : "";
-        if (server.OpenFiles.Any(x => !x.Pipe && x.ObjectId == objectId && objectId.Length != 0 && x.DeletePending)) throw new SmbException(NtStatus.DeletePending);
+        if (server.OpenFiles.Any(x => !x.Pipe && x.ObjectId == objectId && objectId.Length != 0 && x.DeletePending))
+            throw new SmbException(NtStatus.DeletePending);
         foreach (var h in server.OpenFiles.Where(x => !x.Pipe && x.ObjectId == objectId && objectId.Length != 0))
         {
-            if (((access & ReadMask) != 0 && (h.Share & FileShareAccess.Read) == 0) || ((access & WriteMask) != 0 && (h.Share & FileShareAccess.Write) == 0) || ((access & DeleteMask) != 0 && (h.Share & FileShareAccess.Delete) == 0) ||
-                ((h.Access & ReadMask) != 0 && (share & FileShareAccess.Read) == 0) || ((h.Access & WriteMask) != 0 && (share & FileShareAccess.Write) == 0) || ((h.Access & DeleteMask) != 0 && (share & FileShareAccess.Delete) == 0)) throw new SmbException(NtStatus.SharingViolation);
+            if (((access & ReadMask) != 0 && (h.Share & FileShareAccess.Read) == 0) || ((access & WriteMask) != 0 && (h.Share & FileShareAccess.Write) == 0) || ((access & DeleteMask) != 0 && (h.Share & FileShareAccess.Delete) == 0) || ((h.Access & ReadMask) != 0 && (share & FileShareAccess.Read) == 0) || ((h.Access & WriteMask) != 0 && (share & FileShareAccess.Write) == 0) || ((h.Access & DeleteMask) != 0 && (share & FileShareAccess.Delete) == 0))
+                throw new SmbException(NtStatus.SharingViolation);
         }
-        if (exists && disposition == Smb2CreateDisposition.Create) throw new SmbException(NtStatus.ObjectNameCollision);
-        if (!exists && disposition is Smb2CreateDisposition.Open or Smb2CreateDisposition.Overwrite) throw new SmbException(NtStatus.ObjectNameNotFound);
-        if (exists && (options & Smb2CreateOptions.DirectoryFile) != 0 && !isDir) throw new SmbException(NtStatus.NotADirectory);
-        if (isDir && (options & Smb2CreateOptions.NonDirectoryFile) != 0) throw new SmbException(NtStatus.FileIsADirectory);
-        if (isDir && disposition is Smb2CreateDisposition.Supersede or Smb2CreateDisposition.Overwrite or Smb2CreateDisposition.OverwriteIf) throw new SmbException(NtStatus.FileIsADirectory);
-        if ((options & Smb2CreateOptions.DeleteOnClose) != 0) { Writable(); if ((access & DeleteMask) == 0 || path == server.Options.RootPath) throw new SmbException(NtStatus.AccessDenied); }
-        FileStream? stream = null; uint action = exists ? Smb2CreateAction.Opened : Smb2CreateAction.Created;
+
+        if (exists && disposition == Smb2CreateDisposition.Create)
+            throw new SmbException(NtStatus.ObjectNameCollision);
+        if (!exists && disposition is Smb2CreateDisposition.Open or Smb2CreateDisposition.Overwrite)
+            throw new SmbException(NtStatus.ObjectNameNotFound);
+        if (exists && (options & Smb2CreateOptions.DirectoryFile) != 0 && !isDir)
+            throw new SmbException(NtStatus.NotADirectory);
+        if (isDir && (options & Smb2CreateOptions.NonDirectoryFile) != 0)
+            throw new SmbException(NtStatus.FileIsADirectory);
+        if (isDir && disposition is Smb2CreateDisposition.Supersede or Smb2CreateDisposition.Overwrite or Smb2CreateDisposition.OverwriteIf)
+            throw new SmbException(NtStatus.FileIsADirectory);
+        if ((options & Smb2CreateOptions.DeleteOnClose) != 0)
+        {
+            EnsureWritable();
+            if ((access & DeleteMask) == 0 || path == server.Options.RootPath)
+                throw new SmbException(NtStatus.AccessDenied);
+        }
+
+        FileStream? stream = null;
+        uint action = exists ? Smb2CreateAction.Opened : Smb2CreateAction.Created;
         if (!exists)
         {
-            Writable(); if (!Directory.Exists(Path.GetDirectoryName(path))) throw new SmbException(NtStatus.ObjectNameNotFound);
-            if ((options & Smb2CreateOptions.DirectoryFile) != 0) { Directory.CreateDirectory(path); isDir = true; }
+            EnsureWritable();
+            if (!Directory.Exists(Path.GetDirectoryName(path)))
+                throw new SmbException(NtStatus.ObjectNameNotFound);
+            if ((options & Smb2CreateOptions.DirectoryFile) != 0)
+            {
+                Directory.CreateDirectory(path);
+                isDir = true;
+            }
         }
+
         if (!isDir)
         {
             FileMode mode = !exists ? FileMode.CreateNew : disposition is Smb2CreateDisposition.Supersede or Smb2CreateDisposition.Overwrite or Smb2CreateDisposition.OverwriteIf ? FileMode.Truncate : FileMode.Open;
-            if (mode == FileMode.Truncate) { Writable(); if ((access & FileAccessMask.WriteData) == 0) throw new SmbException(NtStatus.AccessDenied); action = disposition == Smb2CreateDisposition.Supersede ? Smb2CreateAction.Superseded : Smb2CreateAction.Overwritten; }
+            if (mode == FileMode.Truncate)
+            {
+                EnsureWritable();
+                if ((access & FileAccessMask.WriteData) == 0)
+                    throw new SmbException(NtStatus.AccessDenied);
+                action = disposition == Smb2CreateDisposition.Supersede ? Smb2CreateAction.Superseded : Smb2CreateAction.Overwritten;
+            }
+
             FileAccess io = (access & WriteMask) != 0 || mode == FileMode.CreateNew ? FileAccess.ReadWrite : FileAccess.Read;
-            stream = new FileStream(path, mode, io, (FileShare)share, SmbLimits.MaxTransferSize, (options & Smb2CreateOptions.WriteThrough) != 0 ? FileOptions.WriteThrough : FileOptions.None);
+            stream = new FileStream(path, mode, io, (FileShare)share, 1, FileOptions.Asynchronous | ((options & Smb2CreateOptions.WriteThrough) != 0 ? FileOptions.WriteThrough : FileOptions.None));
         }
-        var handle = new OpenFile { Path = path, Id = RandomNumberGenerator.GetBytes(Smb2FileId.Size), Tree = tree, Access = access, Share = share, Directory = isDir, Stream = stream, DeletePending = (options & Smb2CreateOptions.DeleteOnClose) != 0 };
+
+        var handle = new OpenFile
+        {
+            Path = path,
+            Id = RandomNumberGenerator.GetBytes(Smb2FileId.Size),
+            Tree = tree,
+            Access = access,
+            Share = share,
+            Directory = isDir,
+            Stream = stream,
+            DeletePending = (options & Smb2CreateOptions.DeleteOnClose) != 0
+        };
         try
         {
             handle.ObjectId = Convert.ToHexString(FileMetadata.Identity(path));
-            if (handle.DeletePending) { handle.DeletePath = path; if (isDir && Directory.EnumerateFileSystemEntries(path).Any()) throw new SmbException(NtStatus.DirectoryNotEmpty); }
-            if (action != Smb2CreateAction.Opened) { uint attributes = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.FileAttributesOffset); FileMetadata.SetAttributes(path, attributes | (isDir ? 0u : FileAttributeFlags.Archive), isDir); FileMetadata.Changed(path); }
+            if (handle.DeletePending)
+            {
+                handle.DeletePath = path;
+                if (isDir && Directory.EnumerateFileSystemEntries(path).Any())
+                    throw new SmbException(NtStatus.DirectoryNotEmpty);
+            }
+
+            if (action != Smb2CreateAction.Opened)
+            {
+                uint attributes = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2CreateRequest.FileAttributesOffset);
+                FileMetadata.SetAttributes(path, attributes | (isDir ? 0u : FileAttributeFlags.Archive), isDir);
+                FileMetadata.Changed(path);
+            }
+
             var b = new byte[Smb2CreateResponse.FixedSize];
             Wire.WriteUInt16LittleEndian(b, 0, Smb2CreateResponse.StructureSize);
-            Wire.WriteUInt32LittleEndian(b, Smb2CreateResponse.CreateActionOffset, action); OpenInfo(b, Smb2CreateResponse.CreationTimeOffset, handle); handle.Id.CopyTo(b, Smb2CreateResponse.FileIdOffset);
+            Wire.WriteUInt32LittleEndian(b, Smb2CreateResponse.CreateActionOffset, action);
+            WriteOpenInfo(b, Smb2CreateResponse.CreationTimeOffset, handle);
+            handle.Id.CopyTo(b, Smb2CreateResponse.FileIdOffset);
             var contexts = new List<byte[]>();
             byte[] Context(string name, byte[] data)
             {
@@ -179,202 +355,426 @@ internal sealed class FileService : IDisposable
                 Wire.WriteUInt16LittleEndian(context, Smb2CreateContext.NameOffsetFieldOffset, Smb2CreateContext.ResponseNameOffset);
                 Wire.WriteUInt16LittleEndian(context, Smb2CreateContext.NameLengthOffset, Smb2CreateContext.TagSize);
                 Wire.WriteUInt16LittleEndian(context, Smb2CreateContext.DataOffsetFieldOffset, Smb2CreateContext.ResponseDataOffset);
-                Wire.WriteUInt32LittleEndian(context, Smb2CreateContext.DataLengthOffset, (uint)data.Length); Encoding.ASCII.GetBytes(name).CopyTo(context, Smb2CreateContext.ResponseNameOffset); data.CopyTo(context, Smb2CreateContext.ResponseDataOffset); return context;
+                Wire.WriteUInt32LittleEndian(context, Smb2CreateContext.DataLengthOffset, (uint)data.Length);
+                Encoding.ASCII.GetBytes(name).CopyTo(context, Smb2CreateContext.ResponseNameOffset);
+                data.CopyTo(context, Smb2CreateContext.ResponseDataOffset);
+                return context;
             }
+
             if (contextNames.Contains(Smb2CreateContextName.QueryMaximalAccess))
             {
                 var data = new byte[Smb2QueryMaximalAccessResponse.Size];
-                Wire.WriteUInt32LittleEndian(data, Smb2QueryMaximalAccessResponse.MaximalAccessOffset, server.Options.Writable ? SmbLimits.SupportedFileAccess : SmbLimits.ReadAccess); contexts.Add(Context(Smb2CreateContextName.QueryMaximalAccess, data));
+                Wire.WriteUInt32LittleEndian(data, Smb2QueryMaximalAccessResponse.MaximalAccessOffset, server.Options.Writable ? SmbLimits.SupportedFileAccess : SmbLimits.ReadAccess);
+                contexts.Add(Context(Smb2CreateContextName.QueryMaximalAccess, data));
             }
-            if (contextNames.Contains(Smb2CreateContextName.QueryOnDiskId)) { var data = new byte[Smb2QueryOnDiskIdResponse.Size]; FileMetadata.Identity(path).CopyTo(data, Smb2QueryOnDiskIdResponse.DiskFileIdOffset); SHA256.HashData(Encoding.UTF8.GetBytes(server.Options.RootPath)).AsSpan(0, Smb2QueryOnDiskIdResponse.IdentifierSize).CopyTo(data.AsSpan(Smb2QueryOnDiskIdResponse.VolumeIdOffset)); contexts.Add(Context(Smb2CreateContextName.QueryOnDiskId, data)); }
+
+            if (contextNames.Contains(Smb2CreateContextName.QueryOnDiskId))
+            {
+                var data = new byte[Smb2QueryOnDiskIdResponse.Size];
+                FileMetadata.Identity(path).CopyTo(data, Smb2QueryOnDiskIdResponse.DiskFileIdOffset);
+                SHA256.HashData(Encoding.UTF8.GetBytes(server.Options.RootPath)).AsSpan(0, Smb2QueryOnDiskIdResponse.IdentifierSize).CopyTo(data.AsSpan(Smb2QueryOnDiskIdResponse.VolumeIdOffset));
+                contexts.Add(Context(Smb2CreateContextName.QueryOnDiskId, data));
+            }
+
             if (contexts.Count != 0)
             {
-                for (int i = 0; i < contexts.Count - 1; i++) Wire.WriteUInt32LittleEndian(contexts[i], Smb2CreateContext.NextOffset, (uint)contexts[i].Length);
+                for (int i = 0; i < contexts.Count - 1; i++)
+                    Wire.WriteUInt32LittleEndian(contexts[i], Smb2CreateContext.NextOffset, (uint)contexts[i].Length);
                 var encoded = Wire.Join(contexts.ToArray());
                 Wire.WriteUInt32LittleEndian(b, Smb2CreateResponse.CreateContextsOffsetFieldOffset, Smb2Header.Size + Smb2CreateResponse.FixedSize);
-                Wire.WriteUInt32LittleEndian(b, Smb2CreateResponse.CreateContextsLengthOffset, (uint)encoded.Length); b = Wire.Join(b, encoded);
+                Wire.WriteUInt32LittleEndian(b, Smb2CreateResponse.CreateContextsLengthOffset, (uint)encoded.Length);
+                b = Wire.Join(b, encoded);
             }
-            handles.Add(Convert.ToHexString(handle.Id), handle); server.OpenFiles.Add(handle); RelatedId = handle.Id; return b;
+
+            handles.Add(FileHandleId.Read(handle.Id), handle);
+            server.OpenFiles.Add(handle);
+            RelatedId = handle.Id;
+            return b;
         }
-        catch { stream?.Dispose(); throw; }
+        catch
+        {
+            stream?.Dispose();
+            throw;
+        }
     }
-    private static FileSystemInfo Info(OpenFile h) => h.Directory ? new DirectoryInfo(h.Path) : new FileInfo(h.Path);
-    private static ulong Size(OpenFile h) => h.Directory || h.Pipe ? 0 : (ulong)(h.Stream?.Length ?? new FileInfo(h.Path).Length);
-    private static ulong Allocation(OpenFile h) => (Size(h) + (SmbLimits.AllocationUnitSize - 1)) & ~(ulong)(SmbLimits.AllocationUnitSize - 1);
-    private static void Times(byte[] b, int p, OpenFile h)
+
+    private static FileSystemInfo GetFileSystemInfo(OpenFile h) => h.Directory ? new DirectoryInfo(h.Path) : new FileInfo(h.Path);
+    private static ulong GetFileSize(OpenFile h) => h.Directory || h.Pipe ? 0 : (ulong)(h.Stream?.Length ?? new FileInfo(h.Path).Length);
+    private static ulong GetAllocationSize(OpenFile h) => (GetFileSize(h) + (SmbLimits.AllocationUnitSize - 1)) & ~(ulong)(SmbLimits.AllocationUnitSize - 1);
+    private static void WriteTimes(byte[] b, int p, OpenFile h)
     {
-        FileMetadata.Times(b, p, h.Path, Info(h));
+        FileMetadata.Times(b, p, h.Path, GetFileSystemInfo(h));
     }
-    private static uint Attributes(OpenFile h) => FileMetadata.Attributes(h.Path, Info(h));
-    private static void Basic(byte[] b, int p, OpenFile h)
+
+    private static uint GetAttributes(OpenFile h) => FileMetadata.Attributes(h.Path, GetFileSystemInfo(h));
+    private static void WriteBasicInfo(byte[] b, int p, OpenFile h)
     {
-        Times(b, p, h);
-        Wire.WriteUInt32LittleEndian(b, p + FileBasicInformation.FileAttributesOffset, Attributes(h));
+        WriteTimes(b, p, h);
+        Wire.WriteUInt32LittleEndian(b, p + FileBasicInformation.FileAttributesOffset, GetAttributes(h));
     }
-    private static void Standard(byte[] b, int p, OpenFile h)
+
+    private static void WriteStandardInfo(byte[] b, int p, OpenFile h)
     {
-        Wire.WriteUInt64LittleEndian(b, p, Allocation(h));
-        Wire.WriteUInt64LittleEndian(b, p + FileStandardInformation.EndOfFileOffset, Size(h));
-        Wire.WriteUInt32LittleEndian(b, p + FileStandardInformation.NumberOfLinksOffset, FileMetadata.LinkCount(h.Path)); b[p + FileStandardInformation.DeletePendingOffset] = h.DeletePending ? (byte)1 : (byte)0; b[p + FileStandardInformation.DirectoryOffset] = h.Directory ? (byte)1 : (byte)0;
+        Wire.WriteUInt64LittleEndian(b, p, GetAllocationSize(h));
+        Wire.WriteUInt64LittleEndian(b, p + FileStandardInformation.EndOfFileOffset, GetFileSize(h));
+        Wire.WriteUInt32LittleEndian(b, p + FileStandardInformation.NumberOfLinksOffset, FileMetadata.LinkCount(h.Path));
+        b[p + FileStandardInformation.DeletePendingOffset] = h.DeletePending ? (byte)1 : (byte)0;
+        b[p + FileStandardInformation.DirectoryOffset] = h.Directory ? (byte)1 : (byte)0;
     }
-    private static void OpenInfo(byte[] b, int p, OpenFile h)
+
+    private static void WriteOpenInfo(byte[] b, int p, OpenFile h)
     {
-        Basic(b, p, h);
-        Wire.WriteUInt64LittleEndian(b, p + FileNetworkOpenInformation.AllocationSizeOffset, Allocation(h));
-        Wire.WriteUInt64LittleEndian(b, p + FileNetworkOpenInformation.EndOfFileOffset, Size(h));
-        Wire.WriteUInt32LittleEndian(b, p + FileNetworkOpenInformation.FileAttributesOffset, Attributes(h));
+        WriteBasicInfo(b, p, h);
+        Wire.WriteUInt64LittleEndian(b, p + FileNetworkOpenInformation.AllocationSizeOffset, GetAllocationSize(h));
+        Wire.WriteUInt64LittleEndian(b, p + FileNetworkOpenInformation.EndOfFileOffset, GetFileSize(h));
+        Wire.WriteUInt32LittleEndian(b, p + FileNetworkOpenInformation.FileAttributesOffset, GetAttributes(h));
     }
-    private byte[] Close(byte[] r, uint tree)
+
+    private byte[] Close(ReadOnlySpan<byte> r, uint tree)
     {
-        Structure(r, Smb2CloseRequest.StructureSize, Smb2Header.Size + Smb2CloseRequest.FixedSize); var h = Find(r, Smb2Header.Size + Smb2CloseRequest.FileIdOffset, tree); var b = new byte[Smb2CloseResponse.FixedSize];
+        ValidateStructure(r, Smb2CloseRequest.StructureSize, Smb2Header.Size + Smb2CloseRequest.FixedSize);
+        var h = FindHandle(r, Smb2Header.Size + Smb2CloseRequest.FileIdOffset, tree);
+        var b = new byte[Smb2CloseResponse.FixedSize];
         Wire.WriteUInt16LittleEndian(b, 0, Smb2CloseResponse.StructureSize);
-        try { if (!h.Pipe && (Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2CloseRequest.FlagsOffset) & Smb2CloseFlags.PostqueryAttributes) != 0) { Wire.WriteUInt16LittleEndian(b, Smb2CloseResponse.FlagsOffset, Smb2CloseFlags.PostqueryAttributes); OpenInfo(b, Smb2CloseResponse.CreationTimeOffset, h); } }
-        finally { Remove(h); }
+        try
+        {
+            if (!h.Pipe && (Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2CloseRequest.FlagsOffset) & Smb2CloseFlags.PostqueryAttributes) != 0)
+            {
+                Wire.WriteUInt16LittleEndian(b, Smb2CloseResponse.FlagsOffset, Smb2CloseFlags.PostqueryAttributes);
+                WriteOpenInfo(b, Smb2CloseResponse.CreationTimeOffset, h);
+            }
+        }
+        finally
+        {
+            Remove(h);
+        }
+
         return b;
     }
+
     private void Remove(OpenFile h)
     {
-        handles.Remove(Convert.ToHexString(h.Id)); server.OpenFiles.Remove(h); h.Dispose();
+        // A pending delete follows the object until the last shared handle closes.
+        handles.Remove(FileHandleId.Read(h.Id));
+        server.OpenFiles.Remove(h);
+        h.Dispose();
         if (h.DeletePending && !h.Pipe)
         {
             string deletePath = h.DeletePath ?? h.Path;
             var others = server.OpenFiles.Where(x => x.ObjectId == h.ObjectId && !x.Pipe).ToArray();
-            if (others.Length > 0) foreach (var x in others) { x.DeletePending = true; x.DeletePath = deletePath; }
-            else if (h.Directory) Directory.Delete(deletePath); else File.Delete(deletePath);
+            if (others.Length > 0)
+                foreach (var x in others)
+                {
+                    x.DeletePending = true;
+                    x.DeletePath = deletePath;
+                }
+            else if (h.Directory)
+                Directory.Delete(deletePath);
+            else
+                File.Delete(deletePath);
         }
     }
-    private byte[] Flush(byte[] r, uint tree) { Structure(r, Smb2FlushRequest.StructureSize, Smb2Header.Size + Smb2FlushRequest.FixedSize); var h = Find(r, Smb2Header.Size + Smb2FlushRequest.FileIdOffset, tree); h.Stream?.Flush(true); return Wire.CreateSimpleMessage(); }
-    private byte[] Read(byte[] r, uint tree)
+
+    private byte[] Flush(ReadOnlySpan<byte> r, uint tree)
     {
-        Structure(r, Smb2ReadRequest.StructureSize, Smb2Header.Size + Smb2ReadRequest.FixedSize); var h = Find(r, Smb2Header.Size + Smb2ReadRequest.FileIdOffset, tree); Require(h, FileAccessMask.ReadData); int n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2ReadRequest.LengthOffset)); long offset = checked((long)Wire.ReadUInt64LittleEndian(r, Smb2Header.Size + Smb2ReadRequest.OffsetFieldOffset));
-        if (n > SmbLimits.MaxTransferSize || Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2ReadRequest.MinimumCountOffset) > n || Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2ReadRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2ReadRequest.ReadChannelInfoLengthOffset) != 0) throw new SmbException(NtStatus.InvalidParameter);
-        byte[] data;
-        if (h.Pipe) { if (h.Rpc.Length == 0) throw new SmbException(NtStatus.PipeDisconnected); data = h.Rpc[..Math.Min(n, h.Rpc.Length)]; h.Rpc = h.Rpc[data.Length..]; }
+        ValidateStructure(r, Smb2FlushRequest.StructureSize, Smb2Header.Size + Smb2FlushRequest.FixedSize);
+        var h = FindHandle(r, Smb2Header.Size + Smb2FlushRequest.FileIdOffset, tree);
+        h.Stream?.Flush(true);
+        return Wire.CreateSimpleMessage();
+    }
+
+    // Payload buffers remain owned until the awaited positional I/O completes.
+    private async ValueTask<byte[]> ReadAsync(ReadOnlyMemory<byte> request, uint tree, CancellationToken cancellationToken)
+    {
+        ValidateStructure(request.Span, Smb2ReadRequest.StructureSize, Smb2Header.Size + Smb2ReadRequest.FixedSize);
+        var handle = FindHandle(request.Span, Smb2Header.Size + Smb2ReadRequest.FileIdOffset, tree);
+        RequireAccess(handle, FileAccessMask.ReadData);
+        int count = checked((int)Wire.ReadUInt32LittleEndian(request.Span, Smb2Header.Size + Smb2ReadRequest.LengthOffset));
+        long offset = checked((long)Wire.ReadUInt64LittleEndian(request.Span, Smb2Header.Size + Smb2ReadRequest.OffsetFieldOffset));
+        uint minimum = Wire.ReadUInt32LittleEndian(request.Span, Smb2Header.Size + Smb2ReadRequest.MinimumCountOffset);
+        if (count > SmbLimits.MaxTransferSize || minimum > count || Wire.ReadUInt32LittleEndian(request.Span, Smb2Header.Size + Smb2ReadRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(request.Span, Smb2Header.Size + Smb2ReadRequest.ReadChannelInfoLengthOffset) != 0)
+            throw new SmbException(NtStatus.InvalidParameter);
+        var response = new byte[Smb2ReadResponse.FixedSize + count];
+        int used;
+        if (handle.Pipe)
+        {
+            if (handle.Rpc.Length == 0)
+                throw new SmbException(NtStatus.PipeDisconnected);
+            used = Math.Min(count, handle.Rpc.Length);
+            handle.Rpc.AsSpan(0, used).CopyTo(response.AsSpan(Smb2ReadResponse.FixedSize));
+            handle.Rpc = handle.Rpc[used..];
+        }
         else
         {
-            if (h.Directory || h.Stream == null) throw new SmbException(NtStatus.FileIsADirectory);
-            data = new byte[n]; h.Stream.Position = offset; int used = h.Stream.Read(data); if ((used == 0 && n > 0) || used < Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2ReadRequest.MinimumCountOffset)) throw new SmbException(NtStatus.EndOfFile); Array.Resize(ref data, used);
+            if (handle.Directory || handle.Stream == null)
+                throw new SmbException(NtStatus.FileIsADirectory);
+            // Read directly into the response, avoiding an intermediate payload array.
+            used = await RandomAccess.ReadAsync(handle.Stream.SafeFileHandle, response.AsMemory(Smb2ReadResponse.FixedSize, count), offset, cancellationToken).ConfigureAwait(false);
+            if ((used == 0 && count > 0) || used < minimum)
+                throw new SmbException(NtStatus.EndOfFile);
         }
-        var b = new byte[Smb2ReadResponse.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2ReadResponse.StructureSize); b[Smb2ReadResponse.DataOffsetFieldOffset] = Smb2Header.Size + Smb2ReadResponse.FixedSize;
-        Wire.WriteUInt32LittleEndian(b, Smb2ReadResponse.DataLengthOffset, (uint)data.Length); return Wire.Join(b, data);
+
+        if (used != count)
+            Array.Resize(ref response, Smb2ReadResponse.FixedSize + used);
+        Wire.WriteUInt16LittleEndian(response, 0, Smb2ReadResponse.StructureSize);
+        response[Smb2ReadResponse.DataOffsetFieldOffset] = Smb2Header.Size + Smb2ReadResponse.FixedSize;
+        Wire.WriteUInt32LittleEndian(response, Smb2ReadResponse.DataLengthOffset, (uint)used);
+        return response;
     }
-    private byte[] Write(byte[] r, uint tree)
+
+    private async ValueTask<byte[]> WriteAsync(ReadOnlyMemory<byte> request, uint tree, CancellationToken cancellationToken)
     {
-        Structure(r, Smb2WriteRequest.StructureSize, Smb2Header.Size + Smb2WriteRequest.FixedSize); var h = Find(r, Smb2Header.Size + Smb2WriteRequest.FileIdOffset, tree); Require(h, WriteMask); int n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2WriteRequest.LengthOffset)), o = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2WriteRequest.DataOffsetFieldOffset); long offset = checked((long)Wire.ReadUInt64LittleEndian(r, Smb2Header.Size + Smb2WriteRequest.OffsetFieldOffset));
-        if (n > SmbLimits.MaxTransferSize || o < Smb2Header.Size + Smb2WriteRequest.FixedSize || Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2WriteRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2WriteRequest.WriteChannelInfoLengthOffset) != 0) throw new SmbException(NtStatus.InvalidParameter); var data = Wire.Slice(r, o, n);
-        if (h.Pipe)
+        ValidateStructure(request.Span, Smb2WriteRequest.StructureSize, Smb2Header.Size + Smb2WriteRequest.FixedSize);
+        var handle = FindHandle(request.Span, Smb2Header.Size + Smb2WriteRequest.FileIdOffset, tree);
+        RequireAccess(handle, WriteMask);
+        int count = checked((int)Wire.ReadUInt32LittleEndian(request.Span, Smb2Header.Size + Smb2WriteRequest.LengthOffset));
+        int dataOffset = Wire.ReadUInt16LittleEndian(request.Span, Smb2Header.Size + Smb2WriteRequest.DataOffsetFieldOffset);
+        long offset = checked((long)Wire.ReadUInt64LittleEndian(request.Span, Smb2Header.Size + Smb2WriteRequest.OffsetFieldOffset));
+        if (count > SmbLimits.MaxTransferSize || dataOffset < Smb2Header.Size + Smb2WriteRequest.FixedSize || Wire.ReadUInt32LittleEndian(request.Span, Smb2Header.Size + Smb2WriteRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(request.Span, Smb2Header.Size + Smb2WriteRequest.WriteChannelInfoLengthOffset) != 0)
+            throw new SmbException(NtStatus.InvalidParameter);
+        _ = Wire.Slice(request.Span, dataOffset, count);
+        var data = request.Slice(dataOffset, count);
+        if (handle.Pipe)
         {
-            if (h.Rpc.Length != 0) throw new SmbException(NtStatus.PipeBusy);
-            h.Rpc = h.Endpoint.Feed(data.ToArray(), server.Options.ShareName);
+            if (handle.Rpc.Length != 0)
+                throw new SmbException(NtStatus.PipeBusy);
+            handle.Rpc = handle.Endpoint.Feed(data.Span, server.Options.ShareName);
         }
         else
         {
-            Writable(); if (h.Directory || h.Stream == null) throw new SmbException(NtStatus.FileIsADirectory);
-            h.Stream.Position = (h.Access & FileAccessMask.WriteData) != 0 ? offset : h.Stream.Length; h.Stream.Write(data); FileMetadata.Changed(h.Path, true); if ((Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2WriteRequest.FlagsOffset) & Smb2WriteFlags.WriteThrough) != 0) h.Stream.Flush(true);
+            EnsureWritable();
+            if (handle.Directory || handle.Stream == null)
+                throw new SmbException(NtStatus.FileIsADirectory);
+            if ((handle.Access & FileAccessMask.WriteData) == 0)
+                offset = handle.Stream.Length;
+            await RandomAccess.WriteAsync(handle.Stream.SafeFileHandle, data, offset, cancellationToken).ConfigureAwait(false);
+            FileMetadata.Changed(handle.Path, true);
+            // Flush-to-disk has no asynchronous BCL equivalent; durability is mandatory.
+            if ((Wire.ReadUInt32LittleEndian(request.Span, Smb2Header.Size + Smb2WriteRequest.FlagsOffset) & Smb2WriteFlags.WriteThrough) != 0)
+                handle.Stream.Flush(true);
         }
-        var b = new byte[Smb2WriteResponse.FixedSize];
-        Wire.WriteUInt16LittleEndian(b, 0, Smb2WriteResponse.StructureSize);
-        Wire.WriteUInt32LittleEndian(b, Smb2WriteResponse.CountOffset, (uint)n); return b;
+
+        var response = new byte[Smb2WriteResponse.FixedSize];
+        Wire.WriteUInt16LittleEndian(response, 0, Smb2WriteResponse.StructureSize);
+        Wire.WriteUInt32LittleEndian(response, Smb2WriteResponse.CountOffset, (uint)count);
+        return response;
     }
-    private byte[] Ioctl(byte[] r, uint tree)
+
+    private byte[] Ioctl(ReadOnlySpan<byte> r, uint tree)
     {
-        Structure(r, Smb2IoctlRequest.StructureSize, Smb2Header.Size + Smb2IoctlRequest.FixedSize); uint code = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2IoctlRequest.CtlCodeOffset);
-        if (code == FileSystemControlCode.ValidateNegotiateInfo) throw new SmbException(NtStatus.NotFound); // FSCTL_VALIDATE_NEGOTIATE_INFO is obsolete for 3.1.1.
-        if (code != FileSystemControlCode.PipeTransceive) throw new SmbException(NtStatus.NotSupported);
-        var h = Find(r, Smb2Header.Size + Smb2IoctlRequest.FileIdOffset, tree); if (!h.Pipe) throw new SmbException(NtStatus.InvalidHandle);
+        ValidateStructure(r, Smb2IoctlRequest.StructureSize, Smb2Header.Size + Smb2IoctlRequest.FixedSize);
+        uint code = Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2IoctlRequest.CtlCodeOffset);
+        if (code == FileSystemControlCode.ValidateNegotiateInfo)
+            throw new SmbException(NtStatus.NotFound); // FSCTL_VALIDATE_NEGOTIATE_INFO is obsolete for 3.1.1.
+        if (code != FileSystemControlCode.PipeTransceive)
+            throw new SmbException(NtStatus.NotSupported);
+        var h = FindHandle(r, Smb2Header.Size + Smb2IoctlRequest.FileIdOffset, tree);
+        if (!h.Pipe)
+            throw new SmbException(NtStatus.InvalidHandle);
         int o = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2IoctlRequest.InputOffsetFieldOffset)), n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2IoctlRequest.InputCountOffset));
-        if (h.Rpc.Length != 0) throw new SmbException(NtStatus.PipeBusy);
-        var data = h.Endpoint.Feed(Wire.Slice(r, o, n).ToArray(), server.Options.ShareName);
-        if (data.Length > Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2IoctlRequest.MaxOutputResponseOffset)) throw new SmbException(NtStatus.BufferTooSmall);
+        if (h.Rpc.Length != 0)
+            throw new SmbException(NtStatus.PipeBusy);
+        var data = h.Endpoint.Feed(Wire.Slice(r, o, n), server.Options.ShareName);
+        if (data.Length > Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2IoctlRequest.MaxOutputResponseOffset))
+            throw new SmbException(NtStatus.BufferTooSmall);
         var b = new byte[Smb2IoctlResponse.FixedSize];
         Wire.WriteUInt16LittleEndian(b, 0, Smb2IoctlResponse.StructureSize);
-        Wire.WriteUInt32LittleEndian(b, Smb2IoctlResponse.CtlCodeOffset, code); h.Id.CopyTo(b, Smb2IoctlResponse.FileIdOffset);
+        Wire.WriteUInt32LittleEndian(b, Smb2IoctlResponse.CtlCodeOffset, code);
+        h.Id.CopyTo(b, Smb2IoctlResponse.FileIdOffset);
         Wire.WriteUInt32LittleEndian(b, Smb2IoctlResponse.OutputOffsetFieldOffset, Smb2Header.Size + Smb2IoctlResponse.FixedSize);
-        Wire.WriteUInt32LittleEndian(b, Smb2IoctlResponse.OutputCountOffset, (uint)data.Length); return Wire.Join(b, data);
+        Wire.WriteUInt32LittleEndian(b, Smb2IoctlResponse.OutputCountOffset, (uint)data.Length);
+        return Wire.Join(b, data);
     }
-    private byte[] QueryDirectory(byte[] r, uint tree)
+
+    private byte[] QueryDirectory(ReadOnlySpan<byte> r, uint tree)
     {
-        Structure(r, Smb2QueryDirectoryRequest.StructureSize, Smb2Header.Size + Smb2QueryDirectoryRequest.FixedSize); var h = Find(r, Smb2Header.Size + Smb2QueryDirectoryRequest.FileIdOffset, tree); Require(h, FileAccessMask.ReadData); if (!h.Directory) throw new SmbException(NtStatus.NotADirectory);
-        int cls = r[Smb2Header.Size + Smb2QueryDirectoryRequest.FileInformationClassOffset], baseSize = cls switch { FileInformationClass.DirectoryInformation => FileDirectoryInformation.FixedSize, FileInformationClass.FullDirectoryInformation => FileDirectoryInformation.FullFixedSize, FileInformationClass.BothDirectoryInformation => FileDirectoryInformation.BothFixedSize, FileInformationClass.NamesInformation => FileDirectoryInformation.NamesFixedSize, FileInformationClass.IdBothDirectoryInformation => FileDirectoryInformation.IdBothFixedSize, FileInformationClass.IdFullDirectoryInformation => FileDirectoryInformation.IdFullFixedSize, _ => throw new SmbException(NtStatus.InvalidInfoClass) };
-        int max = checked((int)Math.Min(Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2QueryDirectoryRequest.OutputBufferLengthOffset), SmbLimits.MaxTransferSize)); int nameOffset = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2QueryDirectoryRequest.FileNameOffsetFieldOffset), nameLength = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2QueryDirectoryRequest.FileNameLengthOffset);
+        // Keep the enumerator and next unreturned entry on the handle across pages.
+        ValidateStructure(r, Smb2QueryDirectoryRequest.StructureSize, Smb2Header.Size + Smb2QueryDirectoryRequest.FixedSize);
+        var h = FindHandle(r, Smb2Header.Size + Smb2QueryDirectoryRequest.FileIdOffset, tree);
+        RequireAccess(h, FileAccessMask.ReadData);
+        if (!h.Directory)
+            throw new SmbException(NtStatus.NotADirectory);
+        int cls = r[Smb2Header.Size + Smb2QueryDirectoryRequest.FileInformationClassOffset], baseSize = cls switch
+        {
+            FileInformationClass.DirectoryInformation => FileDirectoryInformation.FixedSize,
+            FileInformationClass.FullDirectoryInformation => FileDirectoryInformation.FullFixedSize,
+            FileInformationClass.BothDirectoryInformation => FileDirectoryInformation.BothFixedSize,
+            FileInformationClass.NamesInformation => FileDirectoryInformation.NamesFixedSize,
+            FileInformationClass.IdBothDirectoryInformation => FileDirectoryInformation.IdBothFixedSize,
+            FileInformationClass.IdFullDirectoryInformation => FileDirectoryInformation.IdFullFixedSize,
+            _ => throw new SmbException(NtStatus.InvalidInfoClass)
+        };
+        int max = checked((int)Math.Min(Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2QueryDirectoryRequest.OutputBufferLengthOffset), SmbLimits.MaxTransferSize));
+        int nameOffset = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2QueryDirectoryRequest.FileNameOffsetFieldOffset), nameLength = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2QueryDirectoryRequest.FileNameLengthOffset);
         string pattern = nameLength == 0 ? "*" : Wire.Text(Wire.Slice(r, nameOffset, nameLength));
         if (h.Entries == null || (r[Smb2Header.Size + Smb2QueryDirectoryRequest.FlagsOffset] & (Smb2QueryDirectoryFlags.RestartScans | Smb2QueryDirectoryFlags.Reopen)) != 0)
         {
             h.Entries?.Dispose();
-            h.Entries = Directory.EnumerateFileSystemEntries(h.Path).Where(x => (File.GetAttributes(x) & FileAttributes.ReparsePoint) == 0)
-                .Where(x => FileSystemName.MatchesWin32Expression(pattern, Path.GetFileName(x), true)).GetEnumerator(); h.EntryIndex = 0; h.EntryCurrent = null;
+            h.Entries = Directory.EnumerateFileSystemEntries(h.Path).Where(x => (File.GetAttributes(x) & FileAttributes.ReparsePoint) == 0).Where(x => FileSystemName.MatchesWin32Expression(pattern, Path.GetFileName(x), true)).GetEnumerator();
+            h.EntryIndex = 0;
+            h.EntryCurrent = null;
         }
-        var entries = new List<byte[]>(); int length = 0;
+
+        var entries = new List<byte[]>();
+        int length = 0;
         while (true)
         {
-            if (h.EntryCurrent == null) { if (!h.Entries.MoveNext()) break; h.EntryCurrent = h.Entries.Current; }
-            string path = h.EntryCurrent; var name = Encoding.Unicode.GetBytes(Path.GetFileName(path)); var b = new byte[Wire.Align(baseSize + name.Length)];
-            if (length + b.Length > max) { if (length == 0) throw new SmbException(NtStatus.BufferTooSmall); break; }
+            if (h.EntryCurrent == null)
+            {
+                if (!h.Entries.MoveNext())
+                    break;
+                h.EntryCurrent = h.Entries.Current;
+            }
+
+            string path = h.EntryCurrent;
+            var name = Encoding.Unicode.GetBytes(Path.GetFileName(path));
+            var b = new byte[Wire.Align(baseSize + name.Length)];
+            if (length + b.Length > max)
+            {
+                if (length == 0)
+                    throw new SmbException(NtStatus.BufferTooSmall);
+                break;
+            }
+
             Wire.WriteUInt32LittleEndian(b, FileDirectoryInformation.FileIndexOffset, (uint)h.EntryIndex);
-            if (cls == FileInformationClass.NamesInformation) Wire.WriteUInt32LittleEndian(b, FileDirectoryInformation.NamesFileNameLengthOffset, (uint)name.Length);
+            if (cls == FileInformationClass.NamesInformation)
+                Wire.WriteUInt32LittleEndian(b, FileDirectoryInformation.NamesFileNameLengthOffset, (uint)name.Length);
             else
             {
-                var entry = new OpenFile { Path = path, Id = [], Tree = tree, Access = 0, Share = 0, Directory = Directory.Exists(path) };
-                OpenInfo(b, FileDirectoryInformation.CreationTimeOffset, entry);
-                Wire.WriteUInt64LittleEndian(b, FileDirectoryInformation.EndOfFileOffset, Size(entry));
-                Wire.WriteUInt64LittleEndian(b, FileDirectoryInformation.AllocationSizeOffset, Allocation(entry));
+                var entry = new OpenFile
+                {
+                    Path = path,
+                    Id = [],
+                    Tree = tree,
+                    Access = 0,
+                    Share = 0,
+                    Directory = Directory.Exists(path)
+                };
+                WriteOpenInfo(b, FileDirectoryInformation.CreationTimeOffset, entry);
+                Wire.WriteUInt64LittleEndian(b, FileDirectoryInformation.EndOfFileOffset, GetFileSize(entry));
+                Wire.WriteUInt64LittleEndian(b, FileDirectoryInformation.AllocationSizeOffset, GetAllocationSize(entry));
                 Wire.WriteUInt32LittleEndian(b, FileDirectoryInformation.FileNameLengthOffset, (uint)name.Length);
-                if (cls == FileInformationClass.IdBothDirectoryInformation) FileMetadata.Identity(path).CopyTo(b, FileDirectoryInformation.IdBothFileIdOffset);
-                if (cls == FileInformationClass.IdFullDirectoryInformation) FileMetadata.Identity(path).CopyTo(b, FileDirectoryInformation.IdFullFileIdOffset);
+                if (cls == FileInformationClass.IdBothDirectoryInformation)
+                    FileMetadata.Identity(path).CopyTo(b, FileDirectoryInformation.IdBothFileIdOffset);
+                if (cls == FileInformationClass.IdFullDirectoryInformation)
+                    FileMetadata.Identity(path).CopyTo(b, FileDirectoryInformation.IdFullFileIdOffset);
             }
-            name.CopyTo(b, baseSize); entries.Add(b); length += b.Length; h.EntryIndex++; h.EntryCurrent = null;
-            if ((r[Smb2Header.Size + Smb2QueryDirectoryRequest.FlagsOffset] & Smb2QueryDirectoryFlags.ReturnSingleEntry) != 0) break;
+
+            name.CopyTo(b, baseSize);
+            entries.Add(b);
+            length += b.Length;
+            h.EntryIndex++;
+            h.EntryCurrent = null;
+            if ((r[Smb2Header.Size + Smb2QueryDirectoryRequest.FlagsOffset] & Smb2QueryDirectoryFlags.ReturnSingleEntry) != 0)
+                break;
         }
-        if (entries.Count == 0) throw new SmbException(NtStatus.NoMoreFiles);
-        for (int i = 0; i < entries.Count - 1; i++) Wire.WriteUInt32LittleEndian(entries[i], FileDirectoryInformation.NextEntryOffsetFieldOffset, (uint)entries[i].Length);
-        return Output(Wire.Join(entries.ToArray()), max);
+
+        if (entries.Count == 0)
+            throw new SmbException(NtStatus.NoMoreFiles);
+        for (int i = 0; i < entries.Count - 1; i++)
+            Wire.WriteUInt32LittleEndian(entries[i], FileDirectoryInformation.NextEntryOffsetFieldOffset, (uint)entries[i].Length);
+        return CreateQueryResponse(Wire.Join(entries.ToArray()), max);
     }
-    private static byte[] Output(byte[] data, int max)
+
+    private static byte[] CreateQueryResponse(byte[] data, int max)
     {
-        if (data.Length > max) throw new SmbException(NtStatus.BufferTooSmall);
+        if (data.Length > max)
+            throw new SmbException(NtStatus.BufferTooSmall);
         var b = new byte[Smb2QueryResponse.FixedSize];
         Wire.WriteUInt16LittleEndian(b, 0, Smb2QueryResponse.StructureSize);
         Wire.WriteUInt16LittleEndian(b, Smb2QueryResponse.OutputBufferOffsetFieldOffset, Smb2Header.Size + Smb2QueryResponse.FixedSize);
-        Wire.WriteUInt32LittleEndian(b, Smb2QueryResponse.OutputBufferLengthOffset, (uint)data.Length); return Wire.Join(b, data);
+        Wire.WriteUInt32LittleEndian(b, Smb2QueryResponse.OutputBufferLengthOffset, (uint)data.Length);
+        return Wire.Join(b, data);
     }
-    private byte[] QueryInfo(byte[] r, uint tree)
+
+    private byte[] QueryInfo(ReadOnlySpan<byte> r, uint tree)
     {
-        Structure(r, Smb2QueryInfoRequest.StructureSize, Smb2Header.Size + Smb2QueryInfoRequest.FixedSize); var h = Find(r, Smb2Header.Size + Smb2QueryInfoRequest.FileIdOffset, tree); if (h.Pipe) throw new SmbException(NtStatus.NotSupported);
+        ValidateStructure(r, Smb2QueryInfoRequest.StructureSize, Smb2Header.Size + Smb2QueryInfoRequest.FixedSize);
+        var h = FindHandle(r, Smb2Header.Size + Smb2QueryInfoRequest.FileIdOffset, tree);
+        if (h.Pipe)
+            throw new SmbException(NtStatus.NotSupported);
         int inputLength = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2QueryInfoRequest.InputBufferLengthOffset)), inputOffset = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2QueryInfoRequest.InputBufferOffsetFieldOffset);
-        if (inputLength != 0) { if (inputOffset < Smb2Header.Size + Smb2QueryInfoRequest.FixedSize) throw new SmbException(NtStatus.InvalidParameter); _ = Wire.Slice(r, inputOffset, inputLength); }
-        int cls = r[Smb2Header.Size + Smb2QueryInfoRequest.FileInfoClassOffset]; byte[] b = new byte[SmbLimits.InitialInformationBufferSize]; int n;
+        if (inputLength != 0)
+        {
+            if (inputOffset < Smb2Header.Size + Smb2QueryInfoRequest.FixedSize)
+                throw new SmbException(NtStatus.InvalidParameter);
+            _ = Wire.Slice(r, inputOffset, inputLength);
+        }
+
+        int cls = r[Smb2Header.Size + Smb2QueryInfoRequest.FileInfoClassOffset];
+        byte[] b = new byte[SmbLimits.InitialInformationBufferSize];
+        int n;
         if (r[Smb2Header.Size + Smb2QueryInfoRequest.InfoTypeOffset] == Smb2InfoType.File)
         {
             switch (cls)
             {
-                case FileInformationClass.BasicInformation: Require(h, FileAccessMask.ReadAttributes); Basic(b, 0, h); n = FileBasicInformation.Size; break;
-                case FileInformationClass.StandardInformation: Standard(b, 0, h); n = FileStandardInformation.Size; break;
-                case FileInformationClass.InternalInformation: FileMetadata.Identity(h.Path).CopyTo(b, 0); n = FileInternalInformation.Size; break;
-                case FileInformationClass.EaInformation: n = sizeof(uint); break;
-                case FileInformationClass.AccessInformation: Wire.WriteUInt32LittleEndian(b, 0, h.Access); n = sizeof(uint); break;
-                case FileInformationClass.PositionInformation: n = sizeof(ulong); break;
-                case FileInformationClass.ModeInformation: case FileInformationClass.AlignmentInformation: n = sizeof(uint); break;
+                case FileInformationClass.BasicInformation:
+                    RequireAccess(h, FileAccessMask.ReadAttributes);
+                    WriteBasicInfo(b, 0, h);
+                    n = FileBasicInformation.Size;
+                    break;
+                case FileInformationClass.StandardInformation:
+                    WriteStandardInfo(b, 0, h);
+                    n = FileStandardInformation.Size;
+                    break;
+                case FileInformationClass.InternalInformation:
+                    FileMetadata.Identity(h.Path).CopyTo(b, 0);
+                    n = FileInternalInformation.Size;
+                    break;
+                case FileInformationClass.EaInformation:
+                    n = sizeof(uint);
+                    break;
+                case FileInformationClass.AccessInformation:
+                    Wire.WriteUInt32LittleEndian(b, 0, h.Access);
+                    n = sizeof(uint);
+                    break;
+                case FileInformationClass.PositionInformation:
+                    n = sizeof(ulong);
+                    break;
+                case FileInformationClass.ModeInformation:
+                case FileInformationClass.AlignmentInformation:
+                    n = sizeof(uint);
+                    break;
                 case FileInformationClass.AllInformation:
-                    Basic(b, 0, h); Standard(b, FileAllInformation.StandardInformationOffset, h); FileMetadata.Identity(h.Path).CopyTo(b, FileAllInformation.IndexNumberOffset);
+                    WriteBasicInfo(b, 0, h);
+                    WriteStandardInfo(b, FileAllInformation.StandardInformationOffset, h);
+                    FileMetadata.Identity(h.Path).CopyTo(b, FileAllInformation.IndexNumberOffset);
                     Wire.WriteUInt32LittleEndian(b, FileAllInformation.AccessFlagsOffset, h.Access);
                     string relativeName = Path.GetRelativePath(server.Options.RootPath, h.Path);
                     var fullName = Encoding.Unicode.GetBytes("\\" + (relativeName == "." ? "" : relativeName.Replace('/', '\\')));
-                    if (fullName.Length > b.Length - FileAllInformation.FixedSize) Array.Resize(ref b, FileAllInformation.FixedSize + fullName.Length);
-                    Wire.WriteUInt32LittleEndian(b, FileAllInformation.FileNameLengthOffset, (uint)fullName.Length); fullName.CopyTo(b, FileAllInformation.FileNameOffset); n = FileAllInformation.FixedSize + fullName.Length; break;
+                    if (fullName.Length > b.Length - FileAllInformation.FixedSize)
+                        Array.Resize(ref b, FileAllInformation.FixedSize + fullName.Length);
+                    Wire.WriteUInt32LittleEndian(b, FileAllInformation.FileNameLengthOffset, (uint)fullName.Length);
+                    fullName.CopyTo(b, FileAllInformation.FileNameOffset);
+                    n = FileAllInformation.FixedSize + fullName.Length;
+                    break;
                 case FileInformationClass.StreamInformation:
-                    n = 0; if (!h.Directory)
+                    n = 0;
+                    if (!h.Directory)
                     {
                         var name = Encoding.Unicode.GetBytes("::$DATA");
                         Wire.WriteUInt32LittleEndian(b, FileStreamInformation.StreamNameLengthOffset, (uint)name.Length);
-                        Wire.WriteUInt64LittleEndian(b, FileStreamInformation.StreamSizeOffset, Size(h));
-                        Wire.WriteUInt64LittleEndian(b, FileStreamInformation.StreamAllocationSizeOffset, Allocation(h)); name.CopyTo(b, FileStreamInformation.FixedSize); n = FileStreamInformation.FixedSize + name.Length;
+                        Wire.WriteUInt64LittleEndian(b, FileStreamInformation.StreamSizeOffset, GetFileSize(h));
+                        Wire.WriteUInt64LittleEndian(b, FileStreamInformation.StreamAllocationSizeOffset, GetAllocationSize(h));
+                        name.CopyTo(b, FileStreamInformation.FixedSize);
+                        n = FileStreamInformation.FixedSize + name.Length;
                     }
+
                     break;
-                case FileInformationClass.CompressionInformation: Wire.WriteUInt64LittleEndian(b, 0, Size(h)); n = FileCompressionInformation.Size; break;
-                case FileInformationClass.NetworkOpenInformation: OpenInfo(b, 0, h); n = FileNetworkOpenInformation.Size; break;
-                case FileInformationClass.AttributeTagInformation: Wire.WriteUInt32LittleEndian(b, FileAttributeTagInformation.FileAttributesOffset, Attributes(h)); n = FileAttributeTagInformation.Size; break;
-                default: throw new SmbException(NtStatus.InvalidInfoClass);
+                case FileInformationClass.CompressionInformation:
+                    Wire.WriteUInt64LittleEndian(b, 0, GetFileSize(h));
+                    n = FileCompressionInformation.Size;
+                    break;
+                case FileInformationClass.NetworkOpenInformation:
+                    WriteOpenInfo(b, 0, h);
+                    n = FileNetworkOpenInformation.Size;
+                    break;
+                case FileInformationClass.AttributeTagInformation:
+                    Wire.WriteUInt32LittleEndian(b, FileAttributeTagInformation.FileAttributesOffset, GetAttributes(h));
+                    n = FileAttributeTagInformation.Size;
+                    break;
+                default:
+                    throw new SmbException(NtStatus.InvalidInfoClass);
             }
         }
         else if (r[Smb2Header.Size + Smb2QueryInfoRequest.InfoTypeOffset] == Smb2InfoType.FileSystem)
@@ -386,7 +786,10 @@ internal sealed class FileService : IDisposable
                     var label = Encoding.Unicode.GetBytes(server.Options.ShareName);
                     Wire.WriteUInt64LittleEndian(b, FileFsVolumeInformation.VolumeCreationTimeOffset, (ulong)Directory.GetCreationTimeUtc(server.Options.RootPath).ToFileTimeUtc());
                     Wire.WriteUInt32LittleEndian(b, FileFsVolumeInformation.VolumeSerialNumberOffset, SmbLimits.VolumeSerialNumber);
-                    Wire.WriteUInt32LittleEndian(b, FileFsVolumeInformation.VolumeLabelLengthOffset, (uint)label.Length); label.CopyTo(b, FileFsVolumeInformation.FixedSize); n = FileFsVolumeInformation.FixedSize + label.Length; break;
+                    Wire.WriteUInt32LittleEndian(b, FileFsVolumeInformation.VolumeLabelLengthOffset, (uint)label.Length);
+                    label.CopyTo(b, FileFsVolumeInformation.FixedSize);
+                    n = FileFsVolumeInformation.FixedSize + label.Length;
+                    break;
                 case FileSystemInformationClass.SizeInformation:
                 case FileSystemInformationClass.FullSizeInformation:
                     Wire.WriteUInt64LittleEndian(b, FileFsSizeInformation.TotalAllocationUnitsOffset, (ulong)drive.TotalSize / SmbLimits.AllocationUnitSize);
@@ -394,76 +797,166 @@ internal sealed class FileService : IDisposable
                     if (cls == FileSystemInformationClass.SizeInformation)
                     {
                         Wire.WriteUInt32LittleEndian(b, FileFsSizeInformation.SectorsPerAllocationUnitOffset, SmbLimits.AllocationUnitSize / SmbLimits.SectorSize);
-                        Wire.WriteUInt32LittleEndian(b, FileFsSizeInformation.BytesPerSectorOffset, SmbLimits.SectorSize); n = FileFsSizeInformation.Size;
+                        Wire.WriteUInt32LittleEndian(b, FileFsSizeInformation.BytesPerSectorOffset, SmbLimits.SectorSize);
+                        n = FileFsSizeInformation.Size;
                     }
                     else
                     {
                         Wire.WriteUInt64LittleEndian(b, FileFsFullSizeInformation.ActualAvailableAllocationUnitsOffset, (ulong)drive.TotalFreeSpace / SmbLimits.AllocationUnitSize);
                         Wire.WriteUInt32LittleEndian(b, FileFsFullSizeInformation.SectorsPerAllocationUnitOffset, SmbLimits.AllocationUnitSize / SmbLimits.SectorSize);
-                        Wire.WriteUInt32LittleEndian(b, FileFsFullSizeInformation.BytesPerSectorOffset, SmbLimits.SectorSize); n = FileFsFullSizeInformation.Size;
+                        Wire.WriteUInt32LittleEndian(b, FileFsFullSizeInformation.BytesPerSectorOffset, SmbLimits.SectorSize);
+                        n = FileFsFullSizeInformation.Size;
                     }
+
                     break;
                 case FileSystemInformationClass.DeviceInformation:
                     Wire.WriteUInt32LittleEndian(b, FileFsDeviceInformation.DeviceTypeOffset, FileFsDeviceInformation.FileDeviceDisk);
-                    Wire.WriteUInt32LittleEndian(b, FileFsDeviceInformation.CharacteristicsOffset, FileFsDeviceInformation.FileRemoteDevice); n = FileFsDeviceInformation.Size; break;
+                    Wire.WriteUInt32LittleEndian(b, FileFsDeviceInformation.CharacteristicsOffset, FileFsDeviceInformation.FileRemoteDevice);
+                    n = FileFsDeviceInformation.Size;
+                    break;
                 case FileSystemInformationClass.AttributeInformation:
                     Wire.WriteUInt32LittleEndian(b, FileFsAttributeInformation.FileSystemAttributesOffset, FileSystemAttributeFlags.CasePreservedNames | FileSystemAttributeFlags.UnicodeOnDisk | (server.Options.Writable ? 0u : FileSystemAttributeFlags.ReadOnlyVolume));
                     Wire.WriteUInt32LittleEndian(b, FileFsAttributeInformation.MaximumComponentNameLengthOffset, SmbLimits.MaxComponentLength);
-                    Wire.WriteUInt32LittleEndian(b, FileFsAttributeInformation.FileSystemNameLengthOffset, (uint)(SmbLimits.FileSystemName.Length * sizeof(char))); Encoding.Unicode.GetBytes(SmbLimits.FileSystemName).CopyTo(b, FileFsAttributeInformation.FixedSize); n = FileFsAttributeInformation.FixedSize + SmbLimits.FileSystemName.Length * sizeof(char); break;
-                case FileSystemInformationClass.ControlInformation: n = FileFsControlInformation.Size; break;
+                    Wire.WriteUInt32LittleEndian(b, FileFsAttributeInformation.FileSystemNameLengthOffset, (uint)(SmbLimits.FileSystemName.Length * sizeof(char)));
+                    Encoding.Unicode.GetBytes(SmbLimits.FileSystemName).CopyTo(b, FileFsAttributeInformation.FixedSize);
+                    n = FileFsAttributeInformation.FixedSize + SmbLimits.FileSystemName.Length * sizeof(char);
+                    break;
+                case FileSystemInformationClass.ControlInformation:
+                    n = FileFsControlInformation.Size;
+                    break;
                 case FileSystemInformationClass.SectorSizeInformation:
                     Wire.WriteUInt32LittleEndian(b, FileFsSectorSizeInformation.LogicalBytesPerSectorOffset, SmbLimits.SectorSize);
                     Wire.WriteUInt32LittleEndian(b, FileFsSectorSizeInformation.PhysicalBytesPerSectorForAtomicityOffset, SmbLimits.AllocationUnitSize);
                     Wire.WriteUInt32LittleEndian(b, FileFsSectorSizeInformation.PhysicalBytesPerSectorForPerformanceOffset, SmbLimits.AllocationUnitSize);
                     Wire.WriteUInt32LittleEndian(b, FileFsSectorSizeInformation.FileSystemEffectivePhysicalBytesPerSectorForAtomicityOffset, SmbLimits.AllocationUnitSize);
-                    Wire.WriteUInt32LittleEndian(b, FileFsSectorSizeInformation.FlagsOffset, FileFsSectorSizeInformation.AlignedDevice | FileFsSectorSizeInformation.PartitionAlignedOnDevice); n = FileFsSectorSizeInformation.Size; break;
-                default: throw new SmbException(NtStatus.InvalidInfoClass);
+                    Wire.WriteUInt32LittleEndian(b, FileFsSectorSizeInformation.FlagsOffset, FileFsSectorSizeInformation.AlignedDevice | FileFsSectorSizeInformation.PartitionAlignedOnDevice);
+                    n = FileFsSectorSizeInformation.Size;
+                    break;
+                default:
+                    throw new SmbException(NtStatus.InvalidInfoClass);
             }
         }
-        else throw new SmbException(NtStatus.NotSupported);
-        Array.Resize(ref b, n); return Output(b, checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2QueryInfoRequest.OutputBufferLengthOffset)));
+        else
+            throw new SmbException(NtStatus.NotSupported);
+        Array.Resize(ref b, n);
+        return CreateQueryResponse(b, checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2QueryInfoRequest.OutputBufferLengthOffset)));
     }
-    private byte[] SetInfo(byte[] r, uint tree)
+
+    private byte[] SetInfo(ReadOnlySpan<byte> r, uint tree)
     {
-        Structure(r, Smb2SetInfoRequest.StructureSize, Smb2Header.Size + Smb2SetInfoRequest.FixedSize); Writable(); var h = Find(r, Smb2Header.Size + Smb2SetInfoRequest.FileIdOffset, tree);
-        if (r[Smb2Header.Size + Smb2SetInfoRequest.InfoTypeOffset] != Smb2InfoType.File || h.Pipe) throw new SmbException(NtStatus.NotSupported);
-        int n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2SetInfoRequest.BufferLengthOffset)), o = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2SetInfoRequest.BufferOffsetFieldOffset); if (n != 0 && o < Smb2Header.Size + Smb2SetInfoRequest.FixedSize) throw new SmbException(NtStatus.InvalidParameter); var data = Wire.Slice(r, o, n);
+        ValidateStructure(r, Smb2SetInfoRequest.StructureSize, Smb2Header.Size + Smb2SetInfoRequest.FixedSize);
+        EnsureWritable();
+        var h = FindHandle(r, Smb2Header.Size + Smb2SetInfoRequest.FileIdOffset, tree);
+        if (r[Smb2Header.Size + Smb2SetInfoRequest.InfoTypeOffset] != Smb2InfoType.File || h.Pipe)
+            throw new SmbException(NtStatus.NotSupported);
+        int n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb2Header.Size + Smb2SetInfoRequest.BufferLengthOffset)), o = Wire.ReadUInt16LittleEndian(r, Smb2Header.Size + Smb2SetInfoRequest.BufferOffsetFieldOffset);
+        if (n != 0 && o < Smb2Header.Size + Smb2SetInfoRequest.FixedSize)
+            throw new SmbException(NtStatus.InvalidParameter);
+        var data = Wire.Slice(r, o, n);
         switch (r[Smb2Header.Size + Smb2SetInfoRequest.FileInfoClassOffset])
         {
             case FileInformationClass.BasicInformation:
-                Require(h, FileAccessMask.WriteAttributes); if (data.Length != FileBasicInformation.Size) throw new SmbException(NtStatus.InfoLengthMismatch);
+                RequireAccess(h, FileAccessMask.WriteAttributes);
+                if (data.Length != FileBasicInformation.Size)
+                    throw new SmbException(NtStatus.InfoLengthMismatch);
                 uint attr = Wire.ReadUInt32LittleEndian(data, FileBasicInformation.FileAttributesOffset);
-                if ((attr & ~SmbLimits.SupportedFileAttributes) != 0) throw new SmbException(NtStatus.NotSupported);
+                if ((attr & ~SmbLimits.SupportedFileAttributes) != 0)
+                    throw new SmbException(NtStatus.NotSupported);
                 FileMetadata.SetTimes(h.Path, data);
-                if (attr != 0) FileMetadata.SetAttributes(h.Path, attr, h.Directory); break;
+                if (attr != 0)
+                    FileMetadata.SetAttributes(h.Path, attr, h.Directory);
+                break;
             case FileInformationClass.RenameInformation:
-                Require(h, DeleteMask); if (data.Length < FileRenameInformation.FixedSize || Wire.ReadUInt64LittleEndian(data, FileRenameInformation.RootDirectoryOffset) != 0) throw new SmbException(NtStatus.InvalidParameter);
-                if (h.Path == server.Options.RootPath || server.OpenFiles.Any(x => x != h && ((x.Path == h.Path && (x.Share & FileShareAccess.Delete) == 0) || x.Path.StartsWith(h.Path + Path.DirectorySeparatorChar, StringComparison.Ordinal)))) throw new SmbException(NtStatus.SharingViolation);
-                string destination = Resolve(Wire.Text(Wire.Slice(data, FileRenameInformation.FixedSize, checked((int)Wire.ReadUInt32LittleEndian(data, FileRenameInformation.FileNameLengthOffset)))));
-                if (server.OpenFiles.Any(x => x != h && x.Path == destination)) throw new SmbException(NtStatus.SharingViolation);
+                RequireAccess(h, DeleteMask);
+                if (data.Length < FileRenameInformation.FixedSize || Wire.ReadUInt64LittleEndian(data, FileRenameInformation.RootDirectoryOffset) != 0)
+                    throw new SmbException(NtStatus.InvalidParameter);
+                if (h.Path == server.Options.RootPath || server.OpenFiles.Any(x => x != h && ((x.Path == h.Path && (x.Share & FileShareAccess.Delete) == 0) || x.Path.StartsWith(h.Path + Path.DirectorySeparatorChar, StringComparison.Ordinal))))
+                    throw new SmbException(NtStatus.SharingViolation);
+                string destination = ResolvePath(Wire.Text(Wire.Slice(data, FileRenameInformation.FixedSize, checked((int)Wire.ReadUInt32LittleEndian(data, FileRenameInformation.FileNameLengthOffset)))));
+                if (server.OpenFiles.Any(x => x != h && x.Path == destination))
+                    throw new SmbException(NtStatus.SharingViolation);
                 string oldPath = h.Path;
-                if (h.Directory) Directory.Move(oldPath, destination); else File.Move(oldPath, destination, data[0] != 0);
-                foreach (var open in server.OpenFiles.Where(x => !x.Pipe && x.Path == oldPath)) open.Path = destination;
+                if (h.Directory)
+                    Directory.Move(oldPath, destination);
+                else
+                    File.Move(oldPath, destination, data[0] != 0);
+                foreach (var open in server.OpenFiles.Where(x => !x.Pipe && x.Path == oldPath))
+                    open.Path = destination;
                 FileMetadata.Changed(destination);
                 break;
             case FileInformationClass.DispositionInformation:
-                Require(h, DeleteMask); if (data.Length != FileDispositionInformation.Size) throw new SmbException(NtStatus.InfoLengthMismatch);
-                if (h.Path == server.Options.RootPath) throw new SmbException(NtStatus.AccessDenied);
-                if (data[0] != 0 && h.Directory && Directory.EnumerateFileSystemEntries(h.Path).Any()) throw new SmbException(NtStatus.DirectoryNotEmpty);
-                if (server.OpenFiles.Any(x => x != h && x.Path == h.Path && (x.Share & FileShareAccess.Delete) == 0)) throw new SmbException(NtStatus.SharingViolation);
-                h.DeletePending = data[0] != 0; h.DeletePath = h.DeletePending ? h.Path : null; break;
+                RequireAccess(h, DeleteMask);
+                if (data.Length != FileDispositionInformation.Size)
+                    throw new SmbException(NtStatus.InfoLengthMismatch);
+                if (h.Path == server.Options.RootPath)
+                    throw new SmbException(NtStatus.AccessDenied);
+                if (data[0] != 0 && h.Directory && Directory.EnumerateFileSystemEntries(h.Path).Any())
+                    throw new SmbException(NtStatus.DirectoryNotEmpty);
+                if (server.OpenFiles.Any(x => x != h && x.Path == h.Path && (x.Share & FileShareAccess.Delete) == 0))
+                    throw new SmbException(NtStatus.SharingViolation);
+                h.DeletePending = data[0] != 0;
+                h.DeletePath = h.DeletePending ? h.Path : null;
+                break;
             case FileInformationClass.AllocationInformation:
             case FileInformationClass.EndOfFileInformation:
-                Require(h, FileAccessMask.WriteData); if (data.Length != FileEndOfFileInformation.Size || h.Directory || h.Stream == null) throw new SmbException(NtStatus.InvalidParameter);
-                long size = checked((long)Wire.ReadUInt64LittleEndian(data, 0)); if (r[Smb2Header.Size + Smb2SetInfoRequest.FileInfoClassOffset] == FileInformationClass.EndOfFileInformation || size < h.Stream.Length) { h.Stream.SetLength(size); FileMetadata.Changed(h.Path, true); }
+                RequireAccess(h, FileAccessMask.WriteData);
+                if (data.Length != FileEndOfFileInformation.Size || h.Directory || h.Stream == null)
+                    throw new SmbException(NtStatus.InvalidParameter);
+                long size = checked((long)Wire.ReadUInt64LittleEndian(data, 0));
+                if (r[Smb2Header.Size + Smb2SetInfoRequest.FileInfoClassOffset] == FileInformationClass.EndOfFileInformation || size < h.Stream.Length)
+                {
+                    h.Stream.SetLength(size);
+                    FileMetadata.Changed(h.Path, true);
+                }
+
                 break;
-            default: throw new SmbException(NtStatus.InvalidInfoClass);
+            default:
+                throw new SmbException(NtStatus.InvalidInfoClass);
         }
-        return new byte[] { Smb2SetInfoResponse.StructureSize, 0 };
+
+        return new byte[]
+        {
+            Smb2SetInfoResponse.StructureSize,
+            0
+        };
     }
-    internal void CloseTree(uint tree) { lock (server.FileGate) foreach (var h in handles.Values.Where(x => x.Tree == tree).ToArray()) Remove(h); }
-    public void Dispose()
+
+    internal async ValueTask CloseTreeAsync(uint tree, CancellationToken cancellationToken)
     {
-        lock (server.FileGate) foreach (var h in handles.Values.ToArray()) { try { Remove(h); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+        await server.FileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            foreach (var handle in handles.Values.Where(x => x.Tree == tree).ToArray())
+                Remove(handle);
+        }
+        finally
+        {
+            server.FileGate.Release();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await server.FileGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            foreach (var handle in handles.Values.ToArray())
+            {
+                try
+                {
+                    Remove(handle);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        finally
+        {
+            server.FileGate.Release();
+        }
     }
 }

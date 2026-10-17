@@ -4,27 +4,44 @@ namespace Tedd.Smb;
 // integer serializers and flag expressions retain their exact underlying types.
 internal static class Smb2Command
 {
-    internal const ushort Negotiate = 0x0000, SessionSetup = 0x0001, Logoff = 0x0002,
-        TreeConnect = 0x0003, TreeDisconnect = 0x0004, Create = 0x0005, Close = 0x0006,
-        Flush = 0x0007, Read = 0x0008, Write = 0x0009, Ioctl = 0x000b, Cancel = 0x000c,
-        Echo = 0x000d, QueryDirectory = 0x000e, QueryInfo = 0x0010, SetInfo = 0x0011;
+    internal const ushort Negotiate = 0x0000;
+    internal const ushort SessionSetup = 0x0001;
+    internal const ushort Logoff = 0x0002;
+    internal const ushort TreeConnect = 0x0003;
+    internal const ushort TreeDisconnect = 0x0004;
+    internal const ushort Create = 0x0005;
+    internal const ushort Close = 0x0006;
+    internal const ushort Flush = 0x0007;
+    internal const ushort Read = 0x0008;
+    internal const ushort Write = 0x0009;
+    internal const ushort Ioctl = 0x000b;
+    internal const ushort Cancel = 0x000c;
+    internal const ushort Echo = 0x000d;
+    internal const ushort QueryDirectory = 0x000e;
+    internal const ushort QueryInfo = 0x0010;
+    internal const ushort SetInfo = 0x0011;
 }
 
 internal static class Smb2Dialect
 {
-    internal const ushort Wildcard = 0x02ff, Smb311 = 0x0311;
+    internal const ushort Wildcard = 0x02ff;
+    internal const ushort Smb311 = 0x0311;
 }
 
+// Response/async bits are validated independently of the signed/related-operation bits.
 internal static class Smb2HeaderFlags
 {
-    internal const uint ServerToRedir = 0x00000001, AsyncCommand = 0x00000002,
-        RelatedOperations = 0x00000004, Signed = 0x00000008;
+    internal const uint ServerToRedir = 0x00000001;
+    internal const uint AsyncCommand = 0x00000002;
+    internal const uint RelatedOperations = 0x00000004;
+    internal const uint Signed = 0x00000008;
     internal const uint ResponseOrAsync = ServerToRedir | AsyncCommand;
 }
 
 internal static class Smb2SecurityMode
 {
-    internal const ushort SigningEnabled = 0x0001, SigningRequired = 0x0002;
+    internal const ushort SigningEnabled = 0x0001;
+    internal const ushort SigningRequired = 0x0002;
     internal const ushort SigningEnabledAndRequired = SigningEnabled | SigningRequired;
 }
 
@@ -35,23 +52,28 @@ internal static class Smb2GlobalCapabilities
 
 internal static class Smb2SessionFlags
 {
-    internal const ushort IsGuest = 0x0001, IsNull = 0x0002, EncryptData = 0x0004;
+    internal const ushort IsGuest = 0x0001;
+    internal const ushort IsNull = 0x0002;
+    internal const ushort EncryptData = 0x0004;
 }
 
 internal static class Smb2ShareType
 {
-    internal const byte Disk = 0x01, Pipe = 0x02;
+    internal const byte Disk = 0x01;
+    internal const byte Pipe = 0x02;
 }
 
 internal static class Smb2ShareFlags
 {
-    internal const uint NoCaching = 0x00000030, EncryptData = 0x00008000;
+    internal const uint NoCaching = 0x00000030;
+    internal const uint EncryptData = 0x00008000;
 }
 
 internal static class Smb2NegotiateContextType
 {
-    internal const ushort PreauthIntegrityCapabilities = 0x0001, EncryptionCapabilities = 0x0002,
-        SigningCapabilities = 0x0008;
+    internal const ushort PreauthIntegrityCapabilities = 0x0001;
+    internal const ushort EncryptionCapabilities = 0x0002;
+    internal const ushort SigningCapabilities = 0x0008;
 }
 
 internal static class Smb2PreauthHashAlgorithm
@@ -61,7 +83,9 @@ internal static class Smb2PreauthHashAlgorithm
 
 internal static class Smb2Cipher
 {
-    internal const ushort None = 0, Aes128Ccm = 0x0001, Aes128Gcm = 0x0002;
+    internal const ushort None = 0;
+    internal const ushort Aes128Ccm = 0x0001;
+    internal const ushort Aes128Gcm = 0x0002;
 }
 
 internal static class Smb2SigningAlgorithm
@@ -76,30 +100,54 @@ internal static class Smb2ImpersonationLevel
 
 internal static class Smb2CreateDisposition
 {
-    internal const uint Supersede = 0, Open = 1, Create = 2, OpenIf = 3, Overwrite = 4, OverwriteIf = 5;
+    internal const uint Supersede = 0;
+    internal const uint Open = 1;
+    internal const uint Create = 2;
+    internal const uint OpenIf = 3;
+    internal const uint Overwrite = 4;
+    internal const uint OverwriteIf = 5;
 }
 
 internal static class Smb2CreateAction
 {
-    internal const uint Superseded = 0, Opened = 1, Created = 2, Overwritten = 3;
+    internal const uint Superseded = 0;
+    internal const uint Opened = 1;
+    internal const uint Created = 2;
+    internal const uint Overwritten = 3;
 }
 
 internal static class Smb2CreateOptions
 {
-    internal const uint DirectoryFile = 0x00000001, WriteThrough = 0x00000002,
-        NonDirectoryFile = 0x00000040, DeleteOnClose = 0x00001000, OpenByFileId = 0x00002000;
+    internal const uint DirectoryFile = 0x00000001;
+    internal const uint WriteThrough = 0x00000002;
+    internal const uint NonDirectoryFile = 0x00000040;
+    internal const uint DeleteOnClose = 0x00001000;
+    internal const uint OpenByFileId = 0x00002000;
     internal const uint ConflictingDirectoryOptions = DirectoryFile | NonDirectoryFile;
 }
 
+// Access rights and share permissions are different masks; both directions must agree.
 internal static class FileAccessMask
 {
-    internal const uint ReadData = 0x00000001, WriteData = 0x00000002, AppendData = 0x00000004,
-        ReadEa = 0x00000008, WriteEa = 0x00000010, Execute = 0x00000020,
-        ReadAttributes = 0x00000080, WriteAttributes = 0x00000100,
-        Delete = 0x00010000, ReadControl = 0x00020000, WriteDac = 0x00040000,
-        WriteOwner = 0x00080000, Synchronize = 0x00100000, AccessSystemSecurity = 0x01000000,
-        MaximumAllowed = 0x02000000, GenericAll = 0x10000000, GenericExecute = 0x20000000,
-        GenericWrite = 0x40000000, GenericRead = 0x80000000;
+    internal const uint ReadData = 0x00000001;
+    internal const uint WriteData = 0x00000002;
+    internal const uint AppendData = 0x00000004;
+    internal const uint ReadEa = 0x00000008;
+    internal const uint WriteEa = 0x00000010;
+    internal const uint Execute = 0x00000020;
+    internal const uint ReadAttributes = 0x00000080;
+    internal const uint WriteAttributes = 0x00000100;
+    internal const uint Delete = 0x00010000;
+    internal const uint ReadControl = 0x00020000;
+    internal const uint WriteDac = 0x00040000;
+    internal const uint WriteOwner = 0x00080000;
+    internal const uint Synchronize = 0x00100000;
+    internal const uint AccessSystemSecurity = 0x01000000;
+    internal const uint MaximumAllowed = 0x02000000;
+    internal const uint GenericAll = 0x10000000;
+    internal const uint GenericExecute = 0x20000000;
+    internal const uint GenericWrite = 0x40000000;
+    internal const uint GenericRead = 0x80000000;
     internal const uint FileGenericRead = ReadControl | ReadData | ReadAttributes | ReadEa | Synchronize;
     internal const uint FileGenericWrite = ReadControl | WriteData | AppendData | WriteAttributes | WriteEa | Synchronize;
     internal const uint FileGenericExecute = ReadControl | ReadAttributes | Execute | Synchronize;
@@ -108,13 +156,17 @@ internal static class FileAccessMask
 
 internal static class FileShareAccess
 {
-    internal const uint Read = 0x00000001, Write = 0x00000002, Delete = 0x00000004;
+    internal const uint Read = 0x00000001;
+    internal const uint Write = 0x00000002;
+    internal const uint Delete = 0x00000004;
     internal const uint All = Read | Write | Delete;
 }
 
 internal static class Smb2QueryDirectoryFlags
 {
-    internal const byte RestartScans = 0x01, ReturnSingleEntry = 0x02, Reopen = 0x10;
+    internal const byte RestartScans = 0x01;
+    internal const byte ReturnSingleEntry = 0x02;
+    internal const byte Reopen = 0x10;
 }
 
 internal static class Smb2CloseFlags
@@ -129,55 +181,100 @@ internal static class Smb2WriteFlags
 
 internal static class Smb2InfoType
 {
-    internal const byte File = 0x01, FileSystem = 0x02;
+    internal const byte File = 0x01;
+    internal const byte FileSystem = 0x02;
 }
 
+// MS-FSCC class numbers are not the similarly named Windows API enumeration.
 internal static class FileInformationClass
 {
-    internal const byte DirectoryInformation = 1, FullDirectoryInformation = 2, BothDirectoryInformation = 3,
-        BasicInformation = 4, StandardInformation = 5, InternalInformation = 6, EaInformation = 7,
-        AccessInformation = 8, RenameInformation = 10, NamesInformation = 12, DispositionInformation = 13,
-        PositionInformation = 14, ModeInformation = 16, AlignmentInformation = 17, AllInformation = 18,
-        AllocationInformation = 19, EndOfFileInformation = 20, StreamInformation = 22,
-        CompressionInformation = 28, NetworkOpenInformation = 34, AttributeTagInformation = 35,
-        IdBothDirectoryInformation = 37, IdFullDirectoryInformation = 38;
+    internal const byte DirectoryInformation = 1;
+    internal const byte FullDirectoryInformation = 2;
+    internal const byte BothDirectoryInformation = 3;
+    internal const byte BasicInformation = 4;
+    internal const byte StandardInformation = 5;
+    internal const byte InternalInformation = 6;
+    internal const byte EaInformation = 7;
+    internal const byte AccessInformation = 8;
+    internal const byte RenameInformation = 10;
+    internal const byte NamesInformation = 12;
+    internal const byte DispositionInformation = 13;
+    internal const byte PositionInformation = 14;
+    internal const byte ModeInformation = 16;
+    internal const byte AlignmentInformation = 17;
+    internal const byte AllInformation = 18;
+    internal const byte AllocationInformation = 19;
+    internal const byte EndOfFileInformation = 20;
+    internal const byte StreamInformation = 22;
+    internal const byte CompressionInformation = 28;
+    internal const byte NetworkOpenInformation = 34;
+    internal const byte AttributeTagInformation = 35;
+    internal const byte IdBothDirectoryInformation = 37;
+    internal const byte IdFullDirectoryInformation = 38;
 }
 
 internal static class FileSystemInformationClass
 {
-    internal const byte VolumeInformation = 1, SizeInformation = 3, DeviceInformation = 4,
-        AttributeInformation = 5, ControlInformation = 6, FullSizeInformation = 7, SectorSizeInformation = 11;
+    internal const byte VolumeInformation = 1;
+    internal const byte SizeInformation = 3;
+    internal const byte DeviceInformation = 4;
+    internal const byte AttributeInformation = 5;
+    internal const byte ControlInformation = 6;
+    internal const byte FullSizeInformation = 7;
+    internal const byte SectorSizeInformation = 11;
 }
 
 internal static class FileSystemControlCode
 {
-    internal const uint PipeTransceive = 0x0011c017, ValidateNegotiateInfo = 0x00140204;
+    internal const uint PipeTransceive = 0x0011c017;
+    internal const uint ValidateNegotiateInfo = 0x00140204;
 }
 
 internal static class Smb2CreateContextName
 {
-    internal const string EaBuffer = "ExtA", TimewarpToken = "TWrp", QueryMaximalAccess = "MxAc", QueryOnDiskId = "QFid";
+    internal const string EaBuffer = "ExtA";
+    internal const string TimewarpToken = "TWrp";
+    internal const string QueryMaximalAccess = "MxAc";
+    internal const string QueryOnDiskId = "QFid";
 }
 
 internal static class FileAttributeFlags
 {
-    internal const uint ReadOnly = 0x00000001, Hidden = 0x00000002, System = 0x00000004,
-        Directory = 0x00000010, Archive = 0x00000020, Normal = 0x00000080;
+    internal const uint ReadOnly = 0x00000001;
+    internal const uint Hidden = 0x00000002;
+    internal const uint System = 0x00000004;
+    internal const uint Directory = 0x00000010;
+    internal const uint Archive = 0x00000020;
+    internal const uint Normal = 0x00000080;
 }
 
 internal static class FileSystemAttributeFlags
 {
-    internal const uint CasePreservedNames = 0x00000002, UnicodeOnDisk = 0x00000004, ReadOnlyVolume = 0x00080000;
+    internal const uint CasePreservedNames = 0x00000002;
+    internal const uint UnicodeOnDisk = 0x00000004;
+    internal const uint ReadOnlyVolume = 0x00080000;
 }
 
 // Implementation policy, separate from protocol-defined values and structures.
 internal static class SmbLimits
 {
-    internal const int DefaultPort = 445, MaxTransferSize = 65536, MaxFrameSize = 4 * 1024 * 1024,
-        MaxCredits = 32, MaxCompoundCommands = 32, DefaultMaxConnections = 32,
-        MaxConnections = 1024, MaxTrees = 64, MaxHandles = 1024, MaxCreateContexts = 16,
-        MaxNegotiateContexts = 32, MaxAuthenticationTokenSize = 16384, MaxComponentLength = 255,
-        AllocationUnitSize = 4096, SectorSize = 512, PreauthSaltSize = 32, InitialInformationBufferSize = 512;
+    internal const int DefaultPort = 445;
+    internal const int MaxTransferSize = 65536;
+    internal const int MaxFrameSize = 4 * 1024 * 1024;
+    internal const int MaxCredits = 32;
+    internal const int MaxCompoundCommands = 32;
+    internal const int DefaultMaxConnections = 32;
+    internal const int MaxConnections = 1024;
+    internal const int MaxTrees = 64;
+    internal const int MaxHandles = 1024;
+    internal const int MaxCreateContexts = 16;
+    internal const int MaxNegotiateContexts = 32;
+    internal const int MaxAuthenticationTokenSize = 16384;
+    internal const int MaxComponentLength = 255;
+    internal const int AllocationUnitSize = 4096;
+    internal const int SectorSize = 512;
+    internal const int PreauthSaltSize = 32;
+    internal const int InitialInformationBufferSize = 512;
     internal const uint VolumeSerialNumber = 0x534d4233;
     internal const uint DefaultProcessId = 0x0000feff;
     internal const string FileSystemName = "SMB3";
@@ -186,8 +283,6 @@ internal static class SmbLimits
     internal const uint ReadSharingAccess = FileAccessMask.ReadData | FileAccessMask.Execute;
     internal const uint WriteSharingAccess = FileAccessMask.WriteData | FileAccessMask.AppendData;
     internal const uint UnsupportedSecurityAccess = FileAccessMask.AccessSystemSecurity | FileAccessMask.WriteDac | FileAccessMask.WriteOwner;
-    internal const uint MutatingAccess = FileAccessMask.WriteData | FileAccessMask.AppendData | FileAccessMask.WriteEa |
-        FileAccessMask.WriteAttributes | FileAccessMask.Delete | FileAccessMask.WriteDac | FileAccessMask.WriteOwner;
-    internal const uint SupportedFileAttributes = FileAttributeFlags.ReadOnly | FileAttributeFlags.Hidden |
-        FileAttributeFlags.Directory | FileAttributeFlags.Archive | FileAttributeFlags.Normal;
+    internal const uint MutatingAccess = FileAccessMask.WriteData | FileAccessMask.AppendData | FileAccessMask.WriteEa | FileAccessMask.WriteAttributes | FileAccessMask.Delete | FileAccessMask.WriteDac | FileAccessMask.WriteOwner;
+    internal const uint SupportedFileAttributes = FileAttributeFlags.ReadOnly | FileAttributeFlags.Hidden | FileAttributeFlags.Directory | FileAttributeFlags.Archive | FileAttributeFlags.Normal;
 }

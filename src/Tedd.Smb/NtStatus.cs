@@ -11,6 +11,7 @@ internal static class NtStatus
     internal const uint InvalidHandle = 0xc0000008;
     internal const uint InvalidParameter = 0xc000000d;
     internal const uint EndOfFile = 0xc0000011;
+    // SESSION_SETUP uses this status to continue authentication rather than fail it.
     internal const uint MoreProcessingRequired = 0xc0000016;
     internal const uint AccessDenied = 0xc0000022;
     internal const uint BufferTooSmall = 0xc0000023;

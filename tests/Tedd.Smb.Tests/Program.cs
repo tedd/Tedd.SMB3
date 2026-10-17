@@ -3,6 +3,10 @@ using System.Security.Cryptography;
 using System.Text;
 using Tedd.Smb;
 
+// Performance mode executes no file, network, or account mutations.
+if (args is ["perf"]) { PerformanceChecks.Run(); return; }
+if (args is ["perf", var operation, var size]) { PerformanceChecks.Run(operation, int.Parse(size)); return; }
+
 void Equal(byte[] expected, byte[] actual, string label) { if (!expected.AsSpan().SequenceEqual(actual)) throw new Exception(label); Console.WriteLine($"PASS {label}"); }
 void Hex(string expected, byte[] actual, string label) => Equal(Convert.FromHexString(expected), actual, label);
 async Task Reject(Func<Task> action, uint status, string label)
@@ -51,7 +55,8 @@ Hex("08000400000000000100010000000000", contexts[64..80], "SMB3 signing context 
 Hex("02000600000000000200020001000000", Negotiation.Contexts(offerBoth: true)[48..64], "SMB3 cipher-list wire fixture");
 Hex("4E544C4D5353500001000000358208E2000000000000000000000000000000000A0000000000000F",
     Ntlm.Negotiate(), "NTLM negotiate wire fixture");
-ProtocolChecks.Run(root);
+await ProtocolChecks.RunAsync(root);
+await AllocationRefactorChecks.RunAsync(root);
 Hex("31D6CFE0D16AE931B73C59D7E0C089C0", Crypto.Md4([]), "RFC1320 MD4 empty");
 Hex("A448017AAF21D8525FC10AE87AA6729D", Crypto.Md4(Encoding.ASCII.GetBytes("abc")), "RFC1320 MD4 abc");
 Hex("A4F49C406510BDCAB6824EE7C30FD852", Crypto.Md4(Encoding.Unicode.GetBytes("Password")), "NT hash");

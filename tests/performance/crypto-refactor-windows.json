@@ -1,0 +1,1217 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "6fa1c1e",
+  "integrationBranch": "main",
+  "scope": "Synchronous sign/verify and encrypt/decrypt kernels on Windows; not whole-application throughput, tail latency or Linux performance.",
+  "sdk": "10.0.402",
+  "targetFramework": "net10.0",
+  "configuration": "Release",
+  "method": {
+    "primaryMetric": "Allocated bytes per completed sign/verify pair",
+    "secondaryMetric": "Elapsed nanoseconds per operation",
+    "unit": "One fresh process per arm and isolated case; process observations on one host are not independent machines",
+    "warmupIterations": 100,
+    "measuredIterations": {
+      "64": 1000,
+      "4096": 1000,
+      "65536": 100
+    },
+    "discoveryPairs": 5,
+    "confirmationPairs": 3,
+    "order": "Alternate baseline/candidate order per pair",
+    "exclusions": "None; diagnostic epochs retained separately",
+    "thresholds": "Strictly lower signing allocation at every size; zero correctness failures; candidate/control median latency <=1.10 at every size/operation",
+    "exclusiveLock": "One task-owned FileStream held across each complete measurement window; unrelated machine load uncontrolled",
+    "observer": "Stopwatch and current-thread GC allocation counter; no profiler",
+    "limits": [
+      "TieredCompilation=0 uses fully optimized JIT rather than default tiered startup.",
+      "Batch means do not establish individual p99 or confidence bounds.",
+      "All samples use one Windows host; CPU frequency, affinity, thermals and unrelated host load were uncontrolled.",
+      "Setup allocations and retained native/provider memory are excluded; fixed CMAC session buffers remain until disposal.",
+      "No network/filesystem speedup or zero-GC application claim."
+    ]
+  },
+  "candidateDispositions": [
+    {
+      "candidate": "Reusable CMAC transform/subkeys and fixed scratch; span verification with virtual zero signature",
+      "registry": [
+        "A11",
+        "M01",
+        "M02",
+        "M04"
+      ],
+      "disposition": "Accepted: zero managed signing-kernel allocation, lower measured latency, independent vectors and native interoperability pass"
+    },
+    {
+      "candidate": "Reusable AEAD providers",
+      "registry": [
+        "M01"
+      ],
+      "disposition": "Reverted conservatively after exploratory mixed latency; not claimed universally slower or re-evaluated for adoption"
+    },
+    {
+      "candidate": "Stack MD4/RC4 scratch and static round tables; span packet views; value file-handle keys; pooled transport staging; direct response reads",
+      "registry": [
+        "M01",
+        "M02",
+        "M04"
+      ],
+      "disposition": "Correctness-validated allocation-oriented refactors; no individual measured speed claim"
+    },
+    {
+      "candidate": "Async positional file I/O and async sharing gate; ConfigureAwait(false); remove forwarding async wrapper",
+      "registry": [
+        "A11"
+      ],
+      "disposition": "Correctness/concurrency/native-mount validated; no scalability or throughput measurement"
+    },
+    {
+      "candidate": "Unsafe access, hand-written SIMD, blanket inlining, parallel command execution",
+      "disposition": "Not pursued: no measured need and increased correctness/maintenance burden"
+    }
+  ],
+  "confirmationArtifacts": {
+    "baselineLibrarySha256": "51fa6194118e3d7058c792cb81f93289b8e4e75cf4c04186a1469c241af5452f",
+    "candidateLibrarySha256": "61551a643094dc77a2918924714208be6264466b1018d850671d4cee4dc6f3fd",
+    "harnessSourceSha256": "290dbf31127db3b21ab181eda3717080c7e9f8d0f12221012acd603dae63a580",
+    "sourceSha256": {
+      "src/Tedd.Smb/AssemblyInfo.cs": "38be62d2a778dbe7896eacb6151744656e0124c9c44b1a2e6f161539fe1bcd3a",
+      "src/Tedd.Smb/Crypto.cs": "6d5225ac925f55b93a88861f13f386170cdb711974758153b6beaff971c030b4",
+      "src/Tedd.Smb/FileHandleId.cs": "ebf4006f3be1764d9fbd1aad07fe98dadf27d06786b9dd3c289aabfadd096d9c",
+      "src/Tedd.Smb/FileInformationLayouts.cs": "32877410da383d31cf7ea1a73684c3b4e9a78c12b3dbfe711c3f1e0c0a7f3d2f",
+      "src/Tedd.Smb/FileMetadata.cs": "240061e7924c1c9fb9d6baf6f21beb20dbaeb4f2ef6dd4c0959b69dea552b885",
+      "src/Tedd.Smb/FileService.cs": "0f6ab2b7faef36dc87cec7c22eeed2ee3b63afb9e87df0dbca0c679ffc0f92f5",
+      "src/Tedd.Smb/NativeFileConstants.cs": "8582452cefb8015ddca4968e91c84bd1b23837733cf9979ec442a6e2d8438cc6",
+      "src/Tedd.Smb/Negotiation.cs": "90627a2c6374ffc7f678ef4e0813e0d9c01a76379cc10c61fea3ea2b5de563e2",
+      "src/Tedd.Smb/Ntlm.cs": "3491aebcb9aae02dfdb2edbaf699ba86818454075f6f9fae2db35af55a36ca03",
+      "src/Tedd.Smb/NtlmConstants.cs": "0e4436296206e03f8270e8a20e9df18a083cc194b57b65bfaef87d2ff0faa605",
+      "src/Tedd.Smb/NtStatus.cs": "06b6c499cdc659ee37c48c5c48fef3d2b17c18d20155caab4cb40ba9e1ca46c9",
+      "src/Tedd.Smb/Protocol.cs": "2790616e4be0ebeaf1b0fd6087cd72d76d49d17b25496143b6fcb687478dadb9",
+      "src/Tedd.Smb/RpcConstants.cs": "6e0f2fa5561ffd11694de203cb10fc89268b9d37961de5734e78e901d5fc7d05",
+      "src/Tedd.Smb/RpcService.cs": "f16fc1699cdc1df0a588adb24f9ad2f2e2f58e055b36f369bd28a36d664ca77d",
+      "src/Tedd.Smb/Smb2Constants.cs": "3fcedcddb61cff2f1bd3e6a7b6ef494b91b7007805cc09141c403b801e0457db",
+      "src/Tedd.Smb/Smb2Layouts.cs": "4e2fa25e60ef60b33dff4c40ebb4b2562444c6f21f1514e6d719a3cf6cabb16e",
+      "src/Tedd.Smb/SmbClient.cs": "0166db88e74f6ac4be81511e0160b62a42b8e5131c7bc2c2b6a8789547734559",
+      "src/Tedd.Smb/SmbServer.cs": "91b1234990d195e64dfb8d12879d6df1a1463410e15be65c543ddb2f3cf08e27",
+      "src/Tedd.Smb/SmbTransport.cs": "e6482b29e90a864b94506a3f505c0d8e8e50935a7b2c629e68e9f5be42954de7",
+      "src/Tedd.Smb.Host/Program.cs": "f211f503756e0d21ca6c0f2dcab0a9a9196475ac66f1acb5faaadfcc47d0181c"
+    }
+  },
+  "reproduction": [
+    ".\\build.ps1 -Workspace D:\\Workspaces\\AI\\smb-quality-repro",
+    "$env:DOTNET_TieredCompilation='0'",
+    "dotnet D:\\Workspaces\\AI\\smb-quality-repro\\artifacts\\bin\\Tedd.Smb.Tests\\release\\Tedd.Smb.Tests.dll perf sign-verify 4096",
+    "Repeat each operation/size in fresh processes with alternating baseline/candidate order and the fixed budgets above."
+  ],
+  "validation": {
+    "managedWindows": "Pass, SDK10.0.402 normal Release build, zero warnings/errors",
+    "managedLinux": "Pass on WSL Ubuntu24.04, task-owned tmpfs for POSIX metadata",
+    "crypto": "RFC1320/NT hash/RC4 and NIST CMAC vectors; GCM/CCM boundary packets, tamper rejection, immutable signature checks, nonce uniqueness",
+    "protocol": "Golden bytes, signed/encrypted replay/compound/CANCEL tests",
+    "async": "Fragmented TCP frames, truncated payload, canceled write, concurrent encrypted clients, cancellation before channel acquisition",
+    "nativeWindows": [
+      {
+        "server": "WSL C#",
+        "mode": "signed",
+        "dialect": "3.1.1",
+        "nativeFlags": "0x10"
+      },
+      {
+        "server": "WSL C#",
+        "mode": "encrypted",
+        "dialect": "3.1.1",
+        "nativeFlags": "0x18"
+      }
+    ],
+    "nativeLinux": [
+      "WSL C# signed",
+      "WSL C# encrypted",
+      "Windows C# signed",
+      "Windows C# encrypted"
+    ],
+    "nativeOperations": "Unicode, listing, hash-verified transfers, rename, truncate, sparse offset write, flush, timestamps, delete",
+    "independentServer": "C# client on Windows and Linux against private Samba, signed and encrypted",
+    "nativeRpc": "Windows net view over signed IPC mapping returned files Disk SMB3 files",
+    "fixtureCorrections": [
+      "Initial DrvFS Linux fixture failed metadata access; rerun on task-owned POSIX tmpfs passed.",
+      "WSL command-line expansion prevented the first Linux mount sequence; explicit absolute paths passed; the empty /final-managed directory was removed."
+    ]
+  },
+  "prospectiveProtocol": "Objective: reduce signing/verification allocation and latency; reduce encryption provider setup and transport staging allocation. No application throughput claim from kernel results.\nControl: 6fa1c1e Release build, SDK 10.0.402. Same fixed harness for both DLLs.\nDesign: five fresh process pairs, alternating baseline/candidate order by pair. Each process uses 100 warmups per case, then 1000 iterations for 64/4096 bytes and 100 for 65536 bytes. Cases: sign+verify and encrypt+decrypt. Record all observations; no exclusions or sample extension. GC thread allocation counters for synchronous kernels, Stopwatch elapsed. Primary allocation, secondary kernel latency; require strictly lower allocation in sign+verify at every size, no failed correctness, and no median latency regression >10%. External host load uncontrolled; timing conclusions provisional. Freeze candidate before confirmation; three fresh pairs with same budgets.\nCorrectness: existing golden bytes, RFC/NIST crypto vectors, tamper/replay/compound tests, signed/encrypted managed roundtrips, Windows/Linux native mounts, Samba client interoperability.\nCandidates: reusable AES-CMAC/subkeys + stack blocks and virtual signature zeroing; reusable session AEAD; bounded pooled transport staging; direct response reads; async file I/O with async sharing gate; value-type file IDs. Avoid unsafe code, speculative intrinsics, blanket inlining, parallel protocol execution, or unbounded pooling. Frame/result ownership remains explicit arrays.\nPhase 2: AEAD provider reuse rejected by the predeclared 4 KiB median regression guardrail (5309.2 ns vs 3947.2 ns); restore per-operation providers. Freeze remaining changes for five matched baseline/candidate process pairs with the original budgets, order, thresholds and no exclusions. Confirmation: three further fresh pairs, alternating order, after rebuilding the final normal solution and harness. No inference of packet throughput or filesystem performance from these kernels. Candidate source freeze: no further functional crypto changes after this point.\nToolchain control: external-project build emitted an SDK 11 welcome message. Preserve phase-2 observations as exploratory/unqualified pending matching compiler identity. Pin the task root global.json to SDK 10.0.402, rebuild both harness arms from the identical source, and start a new matched-toolchain epoch. Full budget remains five pairs plus three confirmation pairs with original budgets, alternating order and no exclusions. Do not combine epochs or assert AEAD latency effects from unqualified data; the provider-reuse candidate remains rejected conservatively.\nTiering diagnostic: even after restoring the identical per-operation AEAD path, the 4 KiB elapsed comparison regressed while allocations exactly matched the control. Cases run after sign/verify of dramatically different duration, so elapsed-time-dependent tier promotion is a confound. Prior timing comparisons remain exploratory, not accepted speed claims. Final controlled epoch: set DOTNET_TieredCompilation=0 identically for both arms (fully optimized JIT, no promotion delay); pin SDK10.0.402; preserve original fixed iteration counts, warmups, five paired processes + three independent confirmation pairs, order, thresholds and zero exclusions. This regime does not represent default tiered application startup. Allocation is the primary criterion; no filesystem/network throughput or p99 claim. AEAD reuse remains reverted; no further functional crypto changes.\nBoundary diagnostic before acceptance: encrypt/decrypt source is restored but the combined sequence still exceeds its 4 KiB guardrail. Hypothesis: preceding CMAC work changes heap/provider/thermal state differently, so sequence data cannot isolate AEAD throughput. New isolated-case epoch, fixed before results: a separate process per operation/size/arm; all 6 cases retained, no favorable-case selection. Identical SDK10.0.402 and DOTNET_TieredCompilation=0; original 100 warmups,1000/100 measured iterations; five alternating matched pairs per case. Three paired confirmations after fresh normal builds. All previous epochs remain in the evidence artifact and do not count toward isolated-case inference. No application throughput claim. If isolated encryption guardrails still fail, report the mixed result and investigate generated code rather than claim universal improvement.\n",
+  "epochs": [
+    {
+      "label": "Exploratory: reusable AEAD providers, combined cases",
+      "qualifiedForIsolatedKernelInference": false,
+      "environment": [
+        {
+          "Runtime": ".NET 10.0.13",
+          "OS": "Microsoft Windows 10.0.26200",
+          "Architecture": "X64",
+          "ProcessorCount": 32,
+          "ServerGC": false
+        }
+      ],
+      "summary": [
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 11295.1,
+              "allocatedBytesPerOperation": 2480.224
+            },
+            "candidate": {
+              "nsPerOperation": 2467.7,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.2184752680365822,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 298650,
+              "allocatedBytesPerOperation": 91080.704
+            },
+            "candidate": {
+              "nsPerOperation": 59218.1,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.19828595345722416,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 3956605,
+              "allocatedBytesPerOperation": 1442724.16
+            },
+            "candidate": {
+              "nsPerOperation": 498511,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.12599463428873997,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 2933.5,
+              "allocatedBytesPerOperation": 376.224
+            },
+            "candidate": {
+              "nsPerOperation": 954.9,
+              "allocatedBytesPerOperation": 232
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.3255155957047895,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 3947.2,
+              "allocatedBytesPerOperation": 8440.224
+            },
+            "candidate": {
+              "nsPerOperation": 5309.2,
+              "allocatedBytesPerOperation": 8296
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.3450547223348197,
+          "latencyGuardrailPass": false
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 32943,
+              "allocatedBytesPerOperation": 131322.24
+            },
+            "candidate": {
+              "nsPerOperation": 31388,
+              "allocatedBytesPerOperation": 131176
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.9527972558661931,
+          "latencyGuardrailPass": true
+        }
+      ],
+      "observationColumns": [
+        "pair",
+        "arm",
+        "operation",
+        "payloadBytes",
+        "iterations",
+        "nanosecondsPerOperation",
+        "allocatedBytesPerOperation"
+      ],
+      "observations": [
+        [0, "baseline", "sign-verify", 64, 1000, 11340.7, 2480.224],
+        [0, "baseline", "encrypt-decrypt", 64, 1000, 2947.7, 376.224],
+        [0, "baseline", "sign-verify", 4096, 1000, 300295.9, 91080.304],
+        [0, "baseline", "encrypt-decrypt", 4096, 1000, 4007.6, 8440.224],
+        [0, "baseline", "sign-verify", 65536, 100, 4009520, 1442724.16],
+        [0, "baseline", "encrypt-decrypt", 65536, 100, 32943, 131322.24],
+        [0, "candidate", "sign-verify", 64, 1000, 2479.5, 0],
+        [0, "candidate", "encrypt-decrypt", 64, 1000, 932.6, 232],
+        [0, "candidate", "sign-verify", 4096, 1000, 59476.9, 0],
+        [0, "candidate", "encrypt-decrypt", 4096, 1000, 4926.9, 8296],
+        [0, "candidate", "sign-verify", 65536, 100, 642610, 0],
+        [0, "candidate", "encrypt-decrypt", 65536, 100, 32852, 131176],
+        [1, "baseline", "sign-verify", 64, 1000, 11295.1, 2480.224],
+        [1, "baseline", "encrypt-decrypt", 64, 1000, 2927.3, 376.224],
+        [1, "baseline", "sign-verify", 4096, 1000, 289588.7, 91079.744],
+        [1, "baseline", "encrypt-decrypt", 4096, 1000, 3896.1, 8440.224],
+        [1, "baseline", "sign-verify", 65536, 100, 3875280, 1442724.16],
+        [1, "baseline", "encrypt-decrypt", 65536, 100, 34419, 131322.24],
+        [1, "candidate", "sign-verify", 64, 1000, 2443.8, 0],
+        [1, "candidate", "encrypt-decrypt", 64, 1000, 942.6, 232],
+        [1, "candidate", "sign-verify", 4096, 1000, 59061.9, 0],
+        [1, "candidate", "encrypt-decrypt", 4096, 1000, 5309.9, 8296],
+        [1, "candidate", "sign-verify", 65536, 100, 637231, 0],
+        [1, "candidate", "encrypt-decrypt", 65536, 100, 29655, 131176],
+        [2, "baseline", "sign-verify", 64, 1000, 11358.8, 2480.224],
+        [2, "baseline", "encrypt-decrypt", 64, 1000, 2932, 376.224],
+        [2, "baseline", "sign-verify", 4096, 1000, 298650, 91083.904],
+        [2, "baseline", "encrypt-decrypt", 4096, 1000, 3942.4, 8440.224],
+        [2, "baseline", "sign-verify", 65536, 100, 3956605, 1442724.16],
+        [2, "baseline", "encrypt-decrypt", 65536, 100, 34050, 131322.24],
+        [2, "candidate", "sign-verify", 64, 1000, 2467.7, 0],
+        [2, "candidate", "encrypt-decrypt", 64, 1000, 954.9, 232],
+        [2, "candidate", "sign-verify", 4096, 1000, 58903.4, 0],
+        [2, "candidate", "encrypt-decrypt", 4096, 1000, 5309.2, 8296],
+        [2, "candidate", "sign-verify", 65536, 100, 496936, 0],
+        [2, "candidate", "encrypt-decrypt", 65536, 100, 31388, 131176],
+        [3, "baseline", "sign-verify", 64, 1000, 11257.5, 2480.224],
+        [3, "baseline", "encrypt-decrypt", 64, 1000, 2933.5, 376.224],
+        [3, "baseline", "sign-verify", 4096, 1000, 301155.7, 91083.024],
+        [3, "baseline", "encrypt-decrypt", 4096, 1000, 3947.2, 8440.224],
+        [3, "baseline", "sign-verify", 65536, 100, 4030353, 1442724.16],
+        [3, "baseline", "encrypt-decrypt", 65536, 100, 31988, 131322.24],
+        [3, "candidate", "sign-verify", 64, 1000, 2457.9, 0],
+        [3, "candidate", "encrypt-decrypt", 64, 1000, 956.9, 232],
+        [3, "candidate", "sign-verify", 4096, 1000, 59218.1, 0],
+        [3, "candidate", "encrypt-decrypt", 4096, 1000, 5296.2, 8296],
+        [3, "candidate", "sign-verify", 65536, 100, 496413, 0],
+        [3, "candidate", "encrypt-decrypt", 65536, 100, 30187, 131176],
+        [4, "baseline", "sign-verify", 64, 1000, 11278.6, 2480.224],
+        [4, "baseline", "encrypt-decrypt", 64, 1000, 2981.4, 376.224],
+        [4, "baseline", "sign-verify", 4096, 1000, 295148.4, 91080.704],
+        [4, "baseline", "encrypt-decrypt", 4096, 1000, 4096.3, 8440.224],
+        [4, "baseline", "sign-verify", 65536, 100, 3948056, 1442724.16],
+        [4, "baseline", "encrypt-decrypt", 65536, 100, 32294, 131322.24],
+        [4, "candidate", "sign-verify", 64, 1000, 2478.9, 0],
+        [4, "candidate", "encrypt-decrypt", 64, 1000, 993.1, 232],
+        [4, "candidate", "sign-verify", 4096, 1000, 59865.4, 0],
+        [4, "candidate", "encrypt-decrypt", 4096, 1000, 5316.1, 8296],
+        [4, "candidate", "sign-verify", 65536, 100, 498511, 0],
+        [4, "candidate", "encrypt-decrypt", 65536, 100, 32199, 131176]
+      ]
+    },
+    {
+      "label": "Exploratory: AEAD restored, combined cases, SDK selection unqualified",
+      "qualifiedForIsolatedKernelInference": false,
+      "environment": [
+        {
+          "Runtime": ".NET 10.0.13",
+          "OS": "Microsoft Windows 10.0.26200",
+          "Architecture": "X64",
+          "ProcessorCount": 32,
+          "ServerGC": false
+        }
+      ],
+      "summary": [
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 11281.7,
+              "allocatedBytesPerOperation": 2480.224
+            },
+            "candidate": {
+              "nsPerOperation": 2510.2,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.2225019279009369,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 295928.9,
+              "allocatedBytesPerOperation": 91083.744
+            },
+            "candidate": {
+              "nsPerOperation": 59430.9,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.20082830706970492,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 3974280,
+              "allocatedBytesPerOperation": 1442724.16
+            },
+            "candidate": {
+              "nsPerOperation": 502232,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.12637056271827854,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 2956.9,
+              "allocatedBytesPerOperation": 376.224
+            },
+            "candidate": {
+              "nsPerOperation": 2954.5,
+              "allocatedBytesPerOperation": 376.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.9991883391389631,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 3965.2,
+              "allocatedBytesPerOperation": 8440.224
+            },
+            "candidate": {
+              "nsPerOperation": 7006.5,
+              "allocatedBytesPerOperation": 8440.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.766997881569656,
+          "latencyGuardrailPass": false
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 34627,
+              "allocatedBytesPerOperation": 131322.24
+            },
+            "candidate": {
+              "nsPerOperation": 29929,
+              "allocatedBytesPerOperation": 131322.24
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.8643255263233892,
+          "latencyGuardrailPass": true
+        }
+      ],
+      "observationColumns": [
+        "pair",
+        "arm",
+        "operation",
+        "payloadBytes",
+        "iterations",
+        "nanosecondsPerOperation",
+        "allocatedBytesPerOperation"
+      ],
+      "observations": [
+        [0, "baseline", "sign-verify", 64, 1000, 11315.8, 2480.224],
+        [0, "baseline", "encrypt-decrypt", 64, 1000, 2997.6, 376.224],
+        [0, "baseline", "sign-verify", 4096, 1000, 307377.1, 91084.624],
+        [0, "baseline", "encrypt-decrypt", 4096, 1000, 3975.4, 8440.224],
+        [0, "baseline", "sign-verify", 65536, 100, 4128690, 1442724.16],
+        [0, "baseline", "encrypt-decrypt", 65536, 100, 33760, 131322.24],
+        [0, "candidate", "sign-verify", 64, 1000, 2556.4, 0],
+        [0, "candidate", "encrypt-decrypt", 64, 1000, 2970.3, 376.224],
+        [0, "candidate", "sign-verify", 4096, 1000, 59541.8, 0],
+        [0, "candidate", "encrypt-decrypt", 4096, 1000, 6976.9, 8440.224],
+        [0, "candidate", "sign-verify", 65536, 100, 502232, 0],
+        [0, "candidate", "encrypt-decrypt", 65536, 100, 31565, 131322.24],
+        [1, "baseline", "sign-verify", 64, 1000, 11403.3, 2480.224],
+        [1, "baseline", "encrypt-decrypt", 64, 1000, 2969.8, 376.224],
+        [1, "baseline", "sign-verify", 4096, 1000, 310566.6, 91082.624],
+        [1, "baseline", "encrypt-decrypt", 4096, 1000, 3955.2, 8440.224],
+        [1, "baseline", "sign-verify", 65536, 100, 4121593, 1442724.16],
+        [1, "baseline", "encrypt-decrypt", 65536, 100, 36028, 131322.24],
+        [1, "candidate", "sign-verify", 64, 1000, 2488.5, 0],
+        [1, "candidate", "encrypt-decrypt", 64, 1000, 2954.5, 376.224],
+        [1, "candidate", "sign-verify", 4096, 1000, 60226, 0],
+        [1, "candidate", "encrypt-decrypt", 4096, 1000, 6820.1, 8440.224],
+        [1, "candidate", "sign-verify", 65536, 100, 514054, 0],
+        [1, "candidate", "encrypt-decrypt", 65536, 100, 28512, 131322.24],
+        [2, "baseline", "sign-verify", 64, 1000, 11281.7, 2480.224],
+        [2, "baseline", "encrypt-decrypt", 64, 1000, 2938.7, 376.224],
+        [2, "baseline", "sign-verify", 4096, 1000, 287516.4, 91083.744],
+        [2, "baseline", "encrypt-decrypt", 4096, 1000, 3981.8, 8440.224],
+        [2, "baseline", "sign-verify", 65536, 100, 3775805, 1442724.16],
+        [2, "baseline", "encrypt-decrypt", 65536, 100, 39332, 131322.24],
+        [2, "candidate", "sign-verify", 64, 1000, 2510.2, 0],
+        [2, "candidate", "encrypt-decrypt", 64, 1000, 2842.7, 376.224],
+        [2, "candidate", "sign-verify", 4096, 1000, 59301.7, 0],
+        [2, "candidate", "encrypt-decrypt", 4096, 1000, 7006.5, 8440.224],
+        [2, "candidate", "sign-verify", 65536, 100, 496523, 0],
+        [2, "candidate", "encrypt-decrypt", 65536, 100, 29595, 131322.24],
+        [3, "baseline", "sign-verify", 64, 1000, 11057.7, 2480.224],
+        [3, "baseline", "encrypt-decrypt", 64, 1000, 2956.9, 376.224],
+        [3, "baseline", "sign-verify", 4096, 1000, 294697.7, 91083.984],
+        [3, "baseline", "encrypt-decrypt", 4096, 1000, 3965.2, 8440.224],
+        [3, "baseline", "sign-verify", 65536, 100, 3902318, 1442724.16],
+        [3, "baseline", "encrypt-decrypt", 65536, 100, 32876, 131322.24],
+        [3, "candidate", "sign-verify", 64, 1000, 2473.2, 0],
+        [3, "candidate", "encrypt-decrypt", 64, 1000, 2925.9, 376.224],
+        [3, "candidate", "sign-verify", 4096, 1000, 59197.1, 0],
+        [3, "candidate", "encrypt-decrypt", 4096, 1000, 7231, 8440.224],
+        [3, "candidate", "sign-verify", 65536, 100, 643393, 0],
+        [3, "candidate", "encrypt-decrypt", 65536, 100, 29929, 131322.24],
+        [4, "baseline", "sign-verify", 64, 1000, 11243.7, 2480.224],
+        [4, "baseline", "encrypt-decrypt", 64, 1000, 2910.6, 376.224],
+        [4, "baseline", "sign-verify", 4096, 1000, 295928.9, 91081.584],
+        [4, "baseline", "encrypt-decrypt", 4096, 1000, 3940, 8440.224],
+        [4, "baseline", "sign-verify", 65536, 100, 3974280, 1442724.16],
+        [4, "baseline", "encrypt-decrypt", 65536, 100, 34627, 131322.24],
+        [4, "candidate", "sign-verify", 64, 1000, 2565.4, 0],
+        [4, "candidate", "encrypt-decrypt", 64, 1000, 2960.2, 376.224],
+        [4, "candidate", "sign-verify", 4096, 1000, 59430.9, 0],
+        [4, "candidate", "encrypt-decrypt", 4096, 1000, 7021.8, 8440.224],
+        [4, "candidate", "sign-verify", 65536, 100, 497748, 0],
+        [4, "candidate", "encrypt-decrypt", 65536, 100, 32497, 131322.24]
+      ]
+    },
+    {
+      "label": "Exploratory: pinned SDK, default tiering, combined cases",
+      "qualifiedForIsolatedKernelInference": false,
+      "environment": [
+        {
+          "Runtime": ".NET 10.0.13",
+          "OS": "Microsoft Windows 10.0.26200",
+          "Architecture": "X64",
+          "ProcessorCount": 32,
+          "ServerGC": false
+        }
+      ],
+      "summary": [
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 11372.5,
+              "allocatedBytesPerOperation": 2480.224
+            },
+            "candidate": {
+              "nsPerOperation": 2505,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.2202681908111673,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 296203.2,
+              "allocatedBytesPerOperation": 91083.984
+            },
+            "candidate": {
+              "nsPerOperation": 59740.4,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.20168722012456314,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 3929112,
+              "allocatedBytesPerOperation": 1442724.16
+            },
+            "candidate": {
+              "nsPerOperation": 504124,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.1283048179843181,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 2926.2,
+              "allocatedBytesPerOperation": 376.224
+            },
+            "candidate": {
+              "nsPerOperation": 2952.9,
+              "allocatedBytesPerOperation": 376.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.0091244617592783,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 3990.9,
+              "allocatedBytesPerOperation": 8440.224
+            },
+            "candidate": {
+              "nsPerOperation": 6737.9,
+              "allocatedBytesPerOperation": 8440.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.6883159187150767,
+          "latencyGuardrailPass": false
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 32380,
+              "allocatedBytesPerOperation": 131322.24
+            },
+            "candidate": {
+              "nsPerOperation": 29392,
+              "allocatedBytesPerOperation": 131322.24
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.9077208153180976,
+          "latencyGuardrailPass": true
+        }
+      ],
+      "observationColumns": [
+        "pair",
+        "arm",
+        "operation",
+        "payloadBytes",
+        "iterations",
+        "nanosecondsPerOperation",
+        "allocatedBytesPerOperation"
+      ],
+      "observations": [
+        [0, "baseline", "sign-verify", 64, 1000, 11437.2, 2480.224],
+        [0, "baseline", "encrypt-decrypt", 64, 1000, 2995.5, 376.224],
+        [0, "baseline", "sign-verify", 4096, 1000, 294191.1, 91083.984],
+        [0, "baseline", "encrypt-decrypt", 4096, 1000, 3990.9, 8440.224],
+        [0, "baseline", "sign-verify", 65536, 100, 3842950, 1442724.16],
+        [0, "baseline", "encrypt-decrypt", 65536, 100, 32367, 131322.24],
+        [0, "candidate", "sign-verify", 64, 1000, 2525.4, 0],
+        [0, "candidate", "encrypt-decrypt", 64, 1000, 2950.1, 376.224],
+        [0, "candidate", "sign-verify", 4096, 1000, 59747.5, 0],
+        [0, "candidate", "encrypt-decrypt", 4096, 1000, 7136.2, 8440.224],
+        [0, "candidate", "sign-verify", 65536, 100, 639789, 0],
+        [0, "candidate", "encrypt-decrypt", 65536, 100, 29773, 131322.24],
+        [1, "baseline", "sign-verify", 64, 1000, 11236, 2480.224],
+        [1, "baseline", "encrypt-decrypt", 64, 1000, 2926.2, 376.224],
+        [1, "baseline", "sign-verify", 4096, 1000, 286907.6, 91084.384],
+        [1, "baseline", "encrypt-decrypt", 4096, 1000, 4540.6, 8440.224],
+        [1, "baseline", "sign-verify", 65536, 100, 3759985, 1442724.16],
+        [1, "baseline", "encrypt-decrypt", 65536, 100, 34513, 131322.24],
+        [1, "candidate", "sign-verify", 64, 1000, 2505, 0],
+        [1, "candidate", "encrypt-decrypt", 64, 1000, 2952.9, 376.224],
+        [1, "candidate", "sign-verify", 4096, 1000, 59740.4, 0],
+        [1, "candidate", "encrypt-decrypt", 4096, 1000, 6737.9, 8440.224],
+        [1, "candidate", "sign-verify", 65536, 100, 504124, 0],
+        [1, "candidate", "encrypt-decrypt", 65536, 100, 29065, 131322.24],
+        [2, "baseline", "sign-verify", 64, 1000, 11375.5, 2480.224],
+        [2, "baseline", "encrypt-decrypt", 64, 1000, 2944, 376.224],
+        [2, "baseline", "sign-verify", 4096, 1000, 298634.5, 91082.784],
+        [2, "baseline", "encrypt-decrypt", 4096, 1000, 3952.1, 8440.224],
+        [2, "baseline", "sign-verify", 65536, 100, 3929112, 1442724.16],
+        [2, "baseline", "encrypt-decrypt", 65536, 100, 33789, 131322.24],
+        [2, "candidate", "sign-verify", 64, 1000, 2499.8, 0],
+        [2, "candidate", "encrypt-decrypt", 64, 1000, 3025.8, 376.224],
+        [2, "candidate", "sign-verify", 4096, 1000, 59723.8, 0],
+        [2, "candidate", "encrypt-decrypt", 4096, 1000, 6860.5, 8440.224],
+        [2, "candidate", "sign-verify", 65536, 100, 637524, 0],
+        [2, "candidate", "encrypt-decrypt", 65536, 100, 29871, 131322.24],
+        [3, "baseline", "sign-verify", 64, 1000, 11212.5, 2480.224],
+        [3, "baseline", "encrypt-decrypt", 64, 1000, 2915.6, 376.224],
+        [3, "baseline", "sign-verify", 4096, 1000, 298170.7, 91085.024],
+        [3, "baseline", "encrypt-decrypt", 4096, 1000, 4009.7, 8440.224],
+        [3, "baseline", "sign-verify", 65536, 100, 3933732, 1442724.16],
+        [3, "baseline", "encrypt-decrypt", 65536, 100, 32380, 131322.24],
+        [3, "candidate", "sign-verify", 64, 1000, 2476, 0],
+        [3, "candidate", "encrypt-decrypt", 64, 1000, 2968.8, 376.224],
+        [3, "candidate", "sign-verify", 4096, 1000, 59761.3, 0],
+        [3, "candidate", "encrypt-decrypt", 4096, 1000, 6720.7, 8440.224],
+        [3, "candidate", "sign-verify", 65536, 100, 495570, 0],
+        [3, "candidate", "encrypt-decrypt", 65536, 100, 27840, 131322.24],
+        [4, "baseline", "sign-verify", 64, 1000, 11372.5, 2480.224],
+        [4, "baseline", "encrypt-decrypt", 64, 1000, 2912.4, 376.224],
+        [4, "baseline", "sign-verify", 4096, 1000, 296203.2, 91083.024],
+        [4, "baseline", "encrypt-decrypt", 4096, 1000, 3925.9, 8440.224],
+        [4, "baseline", "sign-verify", 65536, 100, 3967940, 1442724.16],
+        [4, "baseline", "encrypt-decrypt", 65536, 100, 32220, 131322.24],
+        [4, "candidate", "sign-verify", 64, 1000, 2525, 0],
+        [4, "candidate", "encrypt-decrypt", 64, 1000, 2883.4, 376.224],
+        [4, "candidate", "sign-verify", 4096, 1000, 59430.7, 0],
+        [4, "candidate", "encrypt-decrypt", 4096, 1000, 6648.3, 8440.224],
+        [4, "candidate", "sign-verify", 65536, 100, 497746, 0],
+        [4, "candidate", "encrypt-decrypt", 65536, 100, 29392, 131322.24]
+      ]
+    },
+    {
+      "label": "Diagnostic: tiering disabled, combined cases retain cross-case state",
+      "qualifiedForIsolatedKernelInference": false,
+      "environment": [
+        {
+          "Runtime": ".NET 10.0.13",
+          "OS": "Microsoft Windows 10.0.26200",
+          "Architecture": "X64",
+          "ProcessorCount": 32,
+          "ServerGC": false,
+          "TieredCompilation": "0",
+          "TieredPGO": "runtime-default"
+        }
+      ],
+      "summary": [
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 8794.6,
+              "allocatedBytesPerOperation": 2480.224
+            },
+            "candidate": {
+              "nsPerOperation": 933,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.106087826620881,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 344232.2,
+              "allocatedBytesPerOperation": 91185.344
+            },
+            "candidate": {
+              "nsPerOperation": 50298.7,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.14611852116100701,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 5412163,
+              "allocatedBytesPerOperation": 1442884.16
+            },
+            "candidate": {
+              "nsPerOperation": 801500,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.14809236159369185,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 2642.3,
+              "allocatedBytesPerOperation": 376.224
+            },
+            "candidate": {
+              "nsPerOperation": 2621.5,
+              "allocatedBytesPerOperation": 376.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.9921280702418347,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 3811.2,
+              "allocatedBytesPerOperation": 8440.224
+            },
+            "candidate": {
+              "nsPerOperation": 6693.9,
+              "allocatedBytesPerOperation": 8440.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.756375944584383,
+          "latencyGuardrailPass": false
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 25968,
+              "allocatedBytesPerOperation": 131322.24
+            },
+            "candidate": {
+              "nsPerOperation": 29117,
+              "allocatedBytesPerOperation": 131322.24
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.1212646333949476,
+          "latencyGuardrailPass": false
+        }
+      ],
+      "observationColumns": [
+        "pair",
+        "arm",
+        "operation",
+        "payloadBytes",
+        "iterations",
+        "nanosecondsPerOperation",
+        "allocatedBytesPerOperation"
+      ],
+      "observations": [
+        [0, "baseline", "sign-verify", 64, 1000, 8646.6, 2480.224],
+        [0, "baseline", "encrypt-decrypt", 64, 1000, 2662.1, 376.224],
+        [0, "baseline", "sign-verify", 4096, 1000, 344232.2, 91185.344],
+        [0, "baseline", "encrypt-decrypt", 4096, 1000, 3885.3, 8440.224],
+        [0, "baseline", "sign-verify", 65536, 100, 5378320, 1442884.16],
+        [0, "baseline", "encrypt-decrypt", 65536, 100, 25728, 131322.24],
+        [0, "candidate", "sign-verify", 64, 1000, 938.4, 0],
+        [0, "candidate", "encrypt-decrypt", 64, 1000, 2666.5, 376.224],
+        [0, "candidate", "sign-verify", 4096, 1000, 50722.2, 0],
+        [0, "candidate", "encrypt-decrypt", 4096, 1000, 6616, 8440.224],
+        [0, "candidate", "sign-verify", 65536, 100, 809460, 0],
+        [0, "candidate", "encrypt-decrypt", 65536, 100, 29158, 131322.24],
+        [1, "baseline", "sign-verify", 64, 1000, 8860.2, 2480.224],
+        [1, "baseline", "encrypt-decrypt", 64, 1000, 2642.3, 376.224],
+        [1, "baseline", "sign-verify", 4096, 1000, 343478.8, 91185.344],
+        [1, "baseline", "encrypt-decrypt", 4096, 1000, 3812.7, 8440.224],
+        [1, "baseline", "sign-verify", 65536, 100, 5412163, 1442884.16],
+        [1, "baseline", "encrypt-decrypt", 65536, 100, 25968, 131322.24],
+        [1, "candidate", "sign-verify", 64, 1000, 930.8, 0],
+        [1, "candidate", "encrypt-decrypt", 64, 1000, 2672.1, 376.224],
+        [1, "candidate", "sign-verify", 4096, 1000, 50077.6, 0],
+        [1, "candidate", "encrypt-decrypt", 4096, 1000, 6303.9, 8440.224],
+        [1, "candidate", "sign-verify", 65536, 100, 798507, 0],
+        [1, "candidate", "encrypt-decrypt", 65536, 100, 29117, 131322.24],
+        [2, "baseline", "sign-verify", 64, 1000, 8722.3, 2480.224],
+        [2, "baseline", "encrypt-decrypt", 64, 1000, 2664.4, 376.224],
+        [2, "baseline", "sign-verify", 4096, 1000, 332689.1, 91185.344],
+        [2, "baseline", "encrypt-decrypt", 4096, 1000, 3764.3, 8440.224],
+        [2, "baseline", "sign-verify", 65536, 100, 5175919, 1442884.16],
+        [2, "baseline", "encrypt-decrypt", 65536, 100, 26390, 131322.24],
+        [2, "candidate", "sign-verify", 64, 1000, 933, 0],
+        [2, "candidate", "encrypt-decrypt", 64, 1000, 2592.2, 376.224],
+        [2, "candidate", "sign-verify", 4096, 1000, 50298.7, 0],
+        [2, "candidate", "encrypt-decrypt", 4096, 1000, 6743.4, 8440.224],
+        [2, "candidate", "sign-verify", 65536, 100, 799695, 0],
+        [2, "candidate", "encrypt-decrypt", 65536, 100, 28985, 131322.24],
+        [3, "baseline", "sign-verify", 64, 1000, 8794.6, 2480.224],
+        [3, "baseline", "encrypt-decrypt", 64, 1000, 2635, 376.224],
+        [3, "baseline", "sign-verify", 4096, 1000, 351470.7, 91185.344],
+        [3, "baseline", "encrypt-decrypt", 4096, 1000, 3811.2, 8440.224],
+        [3, "baseline", "sign-verify", 65536, 100, 5504645, 1442884.16],
+        [3, "baseline", "encrypt-decrypt", 65536, 100, 26157, 131322.24],
+        [3, "candidate", "sign-verify", 64, 1000, 931.2, 0],
+        [3, "candidate", "encrypt-decrypt", 64, 1000, 2611.8, 376.224],
+        [3, "candidate", "sign-verify", 4096, 1000, 50085.4, 0],
+        [3, "candidate", "encrypt-decrypt", 4096, 1000, 6723, 8440.224],
+        [3, "candidate", "sign-verify", 65536, 100, 801500, 0],
+        [3, "candidate", "encrypt-decrypt", 65536, 100, 28848, 131322.24],
+        [4, "baseline", "sign-verify", 64, 1000, 9263.7, 2480.224],
+        [4, "baseline", "encrypt-decrypt", 64, 1000, 2585.9, 376.224],
+        [4, "baseline", "sign-verify", 4096, 1000, 365927.3, 91185.344],
+        [4, "baseline", "encrypt-decrypt", 4096, 1000, 3779.8, 8440.224],
+        [4, "baseline", "sign-verify", 65536, 100, 5746275, 1442884.16],
+        [4, "baseline", "encrypt-decrypt", 65536, 100, 25836, 131322.24],
+        [4, "candidate", "sign-verify", 64, 1000, 965.7, 0],
+        [4, "candidate", "encrypt-decrypt", 64, 1000, 2621.5, 376.224],
+        [4, "candidate", "sign-verify", 4096, 1000, 51575, 0],
+        [4, "candidate", "encrypt-decrypt", 4096, 1000, 6693.9, 8440.224],
+        [4, "candidate", "sign-verify", 65536, 100, 838987, 0],
+        [4, "candidate", "encrypt-decrypt", 65536, 100, 29311, 131322.24]
+      ]
+    },
+    {
+      "label": "Selected: fresh process per case, pinned SDK, tiering disabled",
+      "qualifiedForIsolatedKernelInference": true,
+      "environment": [
+        {
+          "Runtime": ".NET 10.0.13",
+          "OS": "Microsoft Windows 10.0.26200",
+          "Architecture": "X64",
+          "ProcessorCount": 32,
+          "ServerGC": false,
+          "TieredCompilation": "0",
+          "TieredPGO": "runtime-default"
+        }
+      ],
+      "summary": [
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 8805.9,
+              "allocatedBytesPerOperation": 2480.224
+            },
+            "candidate": {
+              "nsPerOperation": 958.7,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.10887018930489786,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 340658,
+              "allocatedBytesPerOperation": 91185.344
+            },
+            "candidate": {
+              "nsPerOperation": 51162.1,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.15018611040985386,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 5495313,
+              "allocatedBytesPerOperation": 1442884.16
+            },
+            "candidate": {
+              "nsPerOperation": 884713,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.16099410534031455,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 2446.2,
+              "allocatedBytesPerOperation": 376.224
+            },
+            "candidate": {
+              "nsPerOperation": 2538.2,
+              "allocatedBytesPerOperation": 376.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.0376093532826425,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 6964.1,
+              "allocatedBytesPerOperation": 8440.224
+            },
+            "candidate": {
+              "nsPerOperation": 7122.7,
+              "allocatedBytesPerOperation": 8440.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.0227739406384169,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 33974,
+              "allocatedBytesPerOperation": 131322.24
+            },
+            "candidate": {
+              "nsPerOperation": 34448,
+              "allocatedBytesPerOperation": 131322.24
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.0139518455289338,
+          "latencyGuardrailPass": true
+        }
+      ],
+      "observationColumns": [
+        "pair",
+        "arm",
+        "operation",
+        "payloadBytes",
+        "iterations",
+        "nanosecondsPerOperation",
+        "allocatedBytesPerOperation"
+      ],
+      "observations": [
+        [0, "baseline", "encrypt-decrypt", 4096, 1000, 7252.2, 8440.224],
+        [0, "baseline", "encrypt-decrypt", 64, 1000, 2422.2, 376.224],
+        [0, "baseline", "encrypt-decrypt", 65536, 100, 33878, 131322.24],
+        [0, "baseline", "sign-verify", 4096, 1000, 341561.4, 91185.344],
+        [0, "baseline", "sign-verify", 64, 1000, 9104.9, 2480.224],
+        [0, "baseline", "sign-verify", 65536, 100, 5495313, 1442884.16],
+        [0, "candidate", "encrypt-decrypt", 4096, 1000, 7421.6, 8440.224],
+        [0, "candidate", "encrypt-decrypt", 64, 1000, 2538.2, 376.224],
+        [0, "candidate", "encrypt-decrypt", 65536, 100, 33921, 131322.24],
+        [0, "candidate", "sign-verify", 4096, 1000, 50416.5, 0],
+        [0, "candidate", "sign-verify", 64, 1000, 959.2, 0],
+        [0, "candidate", "sign-verify", 65536, 100, 1043179, 0],
+        [1, "baseline", "encrypt-decrypt", 4096, 1000, 6859.5, 8440.224],
+        [1, "baseline", "encrypt-decrypt", 64, 1000, 2446.2, 376.224],
+        [1, "baseline", "encrypt-decrypt", 65536, 100, 34912, 131322.24],
+        [1, "baseline", "sign-verify", 4096, 1000, 340456.4, 91185.344],
+        [1, "baseline", "sign-verify", 64, 1000, 8805.9, 2480.224],
+        [1, "baseline", "sign-verify", 65536, 100, 5527947, 1442884.16],
+        [1, "candidate", "encrypt-decrypt", 4096, 1000, 7012, 8440.224],
+        [1, "candidate", "encrypt-decrypt", 64, 1000, 2587.3, 376.224],
+        [1, "candidate", "encrypt-decrypt", 65536, 100, 34560, 131322.24],
+        [1, "candidate", "sign-verify", 4096, 1000, 52345.9, 0],
+        [1, "candidate", "sign-verify", 64, 1000, 958.7, 0],
+        [1, "candidate", "sign-verify", 65536, 100, 884713, 0],
+        [2, "baseline", "encrypt-decrypt", 4096, 1000, 7246.1, 8440.224],
+        [2, "baseline", "encrypt-decrypt", 64, 1000, 2524.6, 376.224],
+        [2, "baseline", "encrypt-decrypt", 65536, 100, 33974, 131322.24],
+        [2, "baseline", "sign-verify", 4096, 1000, 353206, 91185.344],
+        [2, "baseline", "sign-verify", 64, 1000, 8936.2, 2480.224],
+        [2, "baseline", "sign-verify", 65536, 100, 5319980, 1442884.16],
+        [2, "candidate", "encrypt-decrypt", 4096, 1000, 7122.7, 8440.224],
+        [2, "candidate", "encrypt-decrypt", 64, 1000, 2535, 376.224],
+        [2, "candidate", "encrypt-decrypt", 65536, 100, 34448, 131322.24],
+        [2, "candidate", "sign-verify", 4096, 1000, 52762.4, 0],
+        [2, "candidate", "sign-verify", 64, 1000, 959.4, 0],
+        [2, "candidate", "sign-verify", 65536, 100, 810741, 0],
+        [3, "baseline", "encrypt-decrypt", 4096, 1000, 6841.7, 8440.224],
+        [3, "baseline", "encrypt-decrypt", 64, 1000, 2536.9, 376.224],
+        [3, "baseline", "encrypt-decrypt", 65536, 100, 34474, 131322.24],
+        [3, "baseline", "sign-verify", 4096, 1000, 340608.2, 91185.344],
+        [3, "baseline", "sign-verify", 64, 1000, 8615, 2480.224],
+        [3, "baseline", "sign-verify", 65536, 100, 5423368, 1442884.16],
+        [3, "candidate", "encrypt-decrypt", 4096, 1000, 7051.9, 8440.224],
+        [3, "candidate", "encrypt-decrypt", 64, 1000, 2557.5, 376.224],
+        [3, "candidate", "encrypt-decrypt", 65536, 100, 36231, 131322.24],
+        [3, "candidate", "sign-verify", 4096, 1000, 50420.1, 0],
+        [3, "candidate", "sign-verify", 64, 1000, 954.4, 0],
+        [3, "candidate", "sign-verify", 65536, 100, 814192, 0],
+        [4, "baseline", "encrypt-decrypt", 4096, 1000, 6964.1, 8440.224],
+        [4, "baseline", "encrypt-decrypt", 64, 1000, 2439, 376.224],
+        [4, "baseline", "encrypt-decrypt", 65536, 100, 33814, 131322.24],
+        [4, "baseline", "sign-verify", 4096, 1000, 340658, 91185.344],
+        [4, "baseline", "sign-verify", 64, 1000, 8611, 2480.224],
+        [4, "baseline", "sign-verify", 65536, 100, 5518748, 1442884.16],
+        [4, "candidate", "encrypt-decrypt", 4096, 1000, 7257.1, 8440.224],
+        [4, "candidate", "encrypt-decrypt", 64, 1000, 2526.6, 376.224],
+        [4, "candidate", "encrypt-decrypt", 65536, 100, 34225, 131322.24],
+        [4, "candidate", "sign-verify", 4096, 1000, 51162.1, 0],
+        [4, "candidate", "sign-verify", 64, 1000, 931.7, 0],
+        [4, "candidate", "sign-verify", 65536, 100, 908796, 0]
+      ]
+    },
+    {
+      "label": "Confirmation: fresh normal builds, fresh process per case",
+      "qualifiedForIsolatedKernelInference": true,
+      "environment": [
+        {
+          "Runtime": ".NET 10.0.13",
+          "OS": "Microsoft Windows 10.0.26200",
+          "Architecture": "X64",
+          "ProcessorCount": 32,
+          "ServerGC": false,
+          "TieredCompilation": "0",
+          "TieredPGO": "runtime-default"
+        }
+      ],
+      "summary": [
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 8550,
+              "allocatedBytesPerOperation": 2480.224
+            },
+            "candidate": {
+              "nsPerOperation": 956.2,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.11183625730994153,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 352243.7,
+              "allocatedBytesPerOperation": 91185.344
+            },
+            "candidate": {
+              "nsPerOperation": 50620.6,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.14370902872074076,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "sign-verify",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 5351979,
+              "allocatedBytesPerOperation": 1442884.16
+            },
+            "candidate": {
+              "nsPerOperation": 816162,
+              "allocatedBytesPerOperation": 0
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.15249723513489122,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 64,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 2506.9,
+              "allocatedBytesPerOperation": 376.224
+            },
+            "candidate": {
+              "nsPerOperation": 2563.3,
+              "allocatedBytesPerOperation": 376.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 1.0224979057800472,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 4096,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 7178.5,
+              "allocatedBytesPerOperation": 8440.224
+            },
+            "candidate": {
+              "nsPerOperation": 7090,
+              "allocatedBytesPerOperation": 8440.224
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.9876715191195933,
+          "latencyGuardrailPass": true
+        },
+        {
+          "operation": "encrypt-decrypt",
+          "payloadBytes": 65536,
+          "medians": {
+            "baseline": {
+              "nsPerOperation": 34763,
+              "allocatedBytesPerOperation": 131322.24
+            },
+            "candidate": {
+              "nsPerOperation": 34107,
+              "allocatedBytesPerOperation": 131322.24
+            }
+          },
+          "candidateToBaselineLatencyRatio": 0.9811293616776458,
+          "latencyGuardrailPass": true
+        }
+      ],
+      "observationColumns": [
+        "pair",
+        "arm",
+        "operation",
+        "payloadBytes",
+        "iterations",
+        "nanosecondsPerOperation",
+        "allocatedBytesPerOperation"
+      ],
+      "observations": [
+        [0, "baseline", "encrypt-decrypt", 4096, 1000, 7178.5, 8440.224],
+        [0, "baseline", "encrypt-decrypt", 64, 1000, 2544.1, 376.224],
+        [0, "baseline", "encrypt-decrypt", 65536, 100, 34763, 131322.24],
+        [0, "baseline", "sign-verify", 4096, 1000, 339839.7, 91185.344],
+        [0, "baseline", "sign-verify", 64, 1000, 8508.7, 2480.224],
+        [0, "baseline", "sign-verify", 65536, 100, 5351979, 1442884.16],
+        [0, "candidate", "encrypt-decrypt", 4096, 1000, 7042.6, 8440.224],
+        [0, "candidate", "encrypt-decrypt", 64, 1000, 2565.3, 376.224],
+        [0, "candidate", "encrypt-decrypt", 65536, 100, 34107, 131322.24],
+        [0, "candidate", "sign-verify", 4096, 1000, 50449.1, 0],
+        [0, "candidate", "sign-verify", 64, 1000, 956.2, 0],
+        [0, "candidate", "sign-verify", 65536, 100, 818890, 0],
+        [1, "baseline", "encrypt-decrypt", 4096, 1000, 6848, 8440.224],
+        [1, "baseline", "encrypt-decrypt", 64, 1000, 2506.9, 376.224],
+        [1, "baseline", "encrypt-decrypt", 65536, 100, 34210, 131322.24],
+        [1, "baseline", "sign-verify", 4096, 1000, 354120.7, 91185.344],
+        [1, "baseline", "sign-verify", 64, 1000, 8550, 2480.224],
+        [1, "baseline", "sign-verify", 65536, 100, 5377865, 1442884.16],
+        [1, "candidate", "encrypt-decrypt", 4096, 1000, 7090, 8440.224],
+        [1, "candidate", "encrypt-decrypt", 64, 1000, 2563.3, 376.224],
+        [1, "candidate", "encrypt-decrypt", 65536, 100, 32287, 131322.24],
+        [1, "candidate", "sign-verify", 4096, 1000, 50771.1, 0],
+        [1, "candidate", "sign-verify", 64, 1000, 951, 0],
+        [1, "candidate", "sign-verify", 65536, 100, 801756, 0],
+        [2, "baseline", "encrypt-decrypt", 4096, 1000, 7353.3, 8440.224],
+        [2, "baseline", "encrypt-decrypt", 64, 1000, 2439, 376.224],
+        [2, "baseline", "encrypt-decrypt", 65536, 100, 35762, 131322.24],
+        [2, "baseline", "sign-verify", 4096, 1000, 352243.7, 91185.344],
+        [2, "baseline", "sign-verify", 64, 1000, 8761.2, 2480.224],
+        [2, "baseline", "sign-verify", 65536, 100, 5324771, 1442884.16],
+        [2, "candidate", "encrypt-decrypt", 4096, 1000, 7330.4, 8440.224],
+        [2, "candidate", "encrypt-decrypt", 64, 1000, 2512.5, 376.224],
+        [2, "candidate", "encrypt-decrypt", 65536, 100, 34554, 131322.24],
+        [2, "candidate", "sign-verify", 4096, 1000, 50620.6, 0],
+        [2, "candidate", "sign-verify", 64, 1000, 959.6, 0],
+        [2, "candidate", "sign-verify", 65536, 100, 816162, 0]
+      ]
+    }
+  ]
+}

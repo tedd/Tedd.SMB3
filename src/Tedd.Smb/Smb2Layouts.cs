@@ -5,20 +5,40 @@ namespace Tedd.Smb;
 // StructureSize is the wire field value; FixedSize excludes any variable buffer.
 internal static class Smb2Header
 {
-    internal const int Size = 64, ProtocolIdOffset = 0, StructureSizeOffset = 4, CreditChargeOffset = 6,
-        StatusOffset = 8, CommandOffset = 12, CreditsOffset = 14, FlagsOffset = 16,
-        NextCommandOffset = 20, MessageIdOffset = 24, ProcessIdOffset = 32,
-        TreeIdOffset = 36, SessionIdOffset = 40, SignatureOffset = 48, SignatureSize = 16;
+    internal const int Size = 64;
+    internal const int ProtocolIdOffset = 0;
+    internal const int StructureSizeOffset = 4;
+    internal const int CreditChargeOffset = 6;
+    internal const int StatusOffset = 8;
+    internal const int CommandOffset = 12;
+    internal const int CreditsOffset = 14;
+    internal const int FlagsOffset = 16;
+    internal const int NextCommandOffset = 20;
+    internal const int MessageIdOffset = 24;
+    internal const int ProcessIdOffset = 32;
+    internal const int TreeIdOffset = 36;
+    internal const int SessionIdOffset = 40;
+    internal const int SignatureOffset = 48;
+    internal const int SignatureSize = 16;
     internal const uint ProtocolId = 0x424d53fe;
     internal const byte ProtocolPrefix = 0xfe;
 }
 
+// Authentication covers AssociatedData; the signature contains the AEAD tag.
 internal static class Smb2TransformHeader
 {
-    internal const int Size = 52, ProtocolIdOffset = 0, SignatureOffset = 4, SignatureSize = 16,
-        NonceOffset = 20, NonceSize = 16, OriginalMessageSizeOffset = 36,
-        ReservedOffset = 40, FlagsOffset = 42, SessionIdOffset = 44,
-        AssociatedDataOffset = NonceOffset, AssociatedDataSize = Size - AssociatedDataOffset;
+    internal const int Size = 52;
+    internal const int ProtocolIdOffset = 0;
+    internal const int SignatureOffset = 4;
+    internal const int SignatureSize = 16;
+    internal const int NonceOffset = 20;
+    internal const int NonceSize = 16;
+    internal const int OriginalMessageSizeOffset = 36;
+    internal const int ReservedOffset = 40;
+    internal const int FlagsOffset = 42;
+    internal const int SessionIdOffset = 44;
+    internal const int AssociatedDataOffset = NonceOffset;
+    internal const int AssociatedDataSize = Size - AssociatedDataOffset;
     internal const ushort Encrypted = 0x0001;
     internal const uint ProtocolId = 0x424d53fd;
     internal const byte ProtocolPrefix = 0xfd;
@@ -26,194 +46,320 @@ internal static class Smb2TransformHeader
 
 internal static class Smb1NegotiateEnvelope
 {
-    internal const int FixedSize = 35, CommandOffset = 4, WordCountOffset = 32, ByteCountOffset = 33;
+    internal const int FixedSize = 35;
+    internal const int CommandOffset = 4;
+    internal const int WordCountOffset = 32;
+    internal const int ByteCountOffset = 33;
     internal const uint ProtocolId = 0x424d53ff;
-    internal const byte ProtocolPrefix = 0xff, NegotiateCommand = 0x72;
+    internal const byte ProtocolPrefix = 0xff;
+    internal const byte NegotiateCommand = 0x72;
 }
 
 internal static class Smb2NegotiateRequest
 {
-    internal const int FixedSize = 36, StructureSize = 36, DialectCountOffset = 2, SecurityModeOffset = 4,
-        CapabilitiesOffset = 8, ClientGuidOffset = 12, NegotiateContextOffsetFieldOffset = 28,
-        NegotiateContextCountOffset = 32, DialectsOffset = 36;
+    internal const int FixedSize = 36;
+    internal const int StructureSize = 36;
+    internal const int DialectCountOffset = 2;
+    internal const int SecurityModeOffset = 4;
+    internal const int CapabilitiesOffset = 8;
+    internal const int ClientGuidOffset = 12;
+    internal const int NegotiateContextOffsetFieldOffset = 28;
+    internal const int NegotiateContextCountOffset = 32;
+    internal const int DialectsOffset = 36;
 }
 
 internal static class Smb2NegotiateResponse
 {
-    internal const int FixedSize = 64, StructureSize = 65, SecurityModeOffset = 2, DialectRevisionOffset = 4,
-        NegotiateContextCountOffset = 6, ServerGuidOffset = 8, CapabilitiesOffset = 24,
-        MaxTransactSizeOffset = 28, MaxReadSizeOffset = 32, MaxWriteSizeOffset = 36,
-        SystemTimeOffset = 40, SecurityBufferOffsetFieldOffset = 56, SecurityBufferLengthOffset = 58,
-        NegotiateContextOffsetFieldOffset = 60;
+    internal const int FixedSize = 64;
+    internal const int StructureSize = 65;
+    internal const int SecurityModeOffset = 2;
+    internal const int DialectRevisionOffset = 4;
+    internal const int NegotiateContextCountOffset = 6;
+    internal const int ServerGuidOffset = 8;
+    internal const int CapabilitiesOffset = 24;
+    internal const int MaxTransactSizeOffset = 28;
+    internal const int MaxReadSizeOffset = 32;
+    internal const int MaxWriteSizeOffset = 36;
+    internal const int SystemTimeOffset = 40;
+    internal const int SecurityBufferOffsetFieldOffset = 56;
+    internal const int SecurityBufferLengthOffset = 58;
+    internal const int NegotiateContextOffsetFieldOffset = 60;
 }
 
 internal static class Smb2NegotiateContext
 {
-    internal const int HeaderSize = 8, ContextTypeOffset = 0, DataLengthOffset = 2;
+    internal const int HeaderSize = 8;
+    internal const int ContextTypeOffset = 0;
+    internal const int DataLengthOffset = 2;
 }
 
 internal static class Smb2PreauthIntegrityCapabilities
 {
-    internal const int HashAlgorithmCountOffset = 0, SaltLengthOffset = 2, HashAlgorithmsOffset = 4;
+    internal const int HashAlgorithmCountOffset = 0;
+    internal const int SaltLengthOffset = 2;
+    internal const int HashAlgorithmsOffset = 4;
 }
 
 internal static class Smb2AlgorithmCapabilities
 {
-    internal const int AlgorithmCountOffset = 0, AlgorithmsOffset = 2;
+    internal const int AlgorithmCountOffset = 0;
+    internal const int AlgorithmsOffset = 2;
 }
 
 internal static class Smb2SessionSetupRequest
 {
-    internal const int FixedSize = 24, StructureSize = 25, FlagsOffset = 2, SecurityModeOffset = 3,
-        SecurityBufferOffsetFieldOffset = 12, SecurityBufferLengthOffset = 14, PreviousSessionIdOffset = 16;
+    internal const int FixedSize = 24;
+    internal const int StructureSize = 25;
+    internal const int FlagsOffset = 2;
+    internal const int SecurityModeOffset = 3;
+    internal const int SecurityBufferOffsetFieldOffset = 12;
+    internal const int SecurityBufferLengthOffset = 14;
+    internal const int PreviousSessionIdOffset = 16;
 }
 
 internal static class Smb2SessionSetupResponse
 {
-    internal const int FixedSize = 8, StructureSize = 9, SessionFlagsOffset = 2,
-        SecurityBufferOffsetFieldOffset = 4, SecurityBufferLengthOffset = 6;
+    internal const int FixedSize = 8;
+    internal const int StructureSize = 9;
+    internal const int SessionFlagsOffset = 2;
+    internal const int SecurityBufferOffsetFieldOffset = 4;
+    internal const int SecurityBufferLengthOffset = 6;
 }
 
 internal static class Smb2TreeConnectRequest
 {
-    internal const int FixedSize = 8, StructureSize = 9, PathOffsetFieldOffset = 4, PathLengthOffset = 6;
+    internal const int FixedSize = 8;
+    internal const int StructureSize = 9;
+    internal const int PathOffsetFieldOffset = 4;
+    internal const int PathLengthOffset = 6;
 }
 
 internal static class Smb2TreeConnectResponse
 {
-    internal const int FixedSize = 16, StructureSize = 16, ShareTypeOffset = 2, ShareFlagsOffset = 4,
-        MaximalAccessOffset = 12;
+    internal const int FixedSize = 16;
+    internal const int StructureSize = 16;
+    internal const int ShareTypeOffset = 2;
+    internal const int ShareFlagsOffset = 4;
+    internal const int MaximalAccessOffset = 12;
 }
 
 internal static class Smb2CreateRequest
 {
-    internal const int FixedSize = 56, StructureSize = 57, ImpersonationLevelOffset = 4,
-        DesiredAccessOffset = 24, FileAttributesOffset = 28, ShareAccessOffset = 32,
-        CreateDispositionOffset = 36, CreateOptionsOffset = 40, NameOffsetFieldOffset = 44,
-        NameLengthOffset = 46, CreateContextsOffsetFieldOffset = 48, CreateContextsLengthOffset = 52;
+    internal const int FixedSize = 56;
+    internal const int StructureSize = 57;
+    internal const int ImpersonationLevelOffset = 4;
+    internal const int DesiredAccessOffset = 24;
+    internal const int FileAttributesOffset = 28;
+    internal const int ShareAccessOffset = 32;
+    internal const int CreateDispositionOffset = 36;
+    internal const int CreateOptionsOffset = 40;
+    internal const int NameOffsetFieldOffset = 44;
+    internal const int NameLengthOffset = 46;
+    internal const int CreateContextsOffsetFieldOffset = 48;
+    internal const int CreateContextsLengthOffset = 52;
 }
 
 internal static class Smb2CreateResponse
 {
-    internal const int FixedSize = 88, StructureSize = 89, CreateActionOffset = 4,
-        CreationTimeOffset = 8, EndOfFileOffset = 48, FileIdOffset = 64,
-        CreateContextsOffsetFieldOffset = 80, CreateContextsLengthOffset = 84;
+    internal const int FixedSize = 88;
+    internal const int StructureSize = 89;
+    internal const int CreateActionOffset = 4;
+    internal const int CreationTimeOffset = 8;
+    internal const int EndOfFileOffset = 48;
+    internal const int FileIdOffset = 64;
+    internal const int CreateContextsOffsetFieldOffset = 80;
+    internal const int CreateContextsLengthOffset = 84;
 }
 
+// Next is relative to this context; name/data offsets are also context-relative.
 internal static class Smb2CreateContext
 {
-    internal const int HeaderSize = 16, NextOffset = 0, NameOffsetFieldOffset = 4, NameLengthOffset = 6,
-        DataOffsetFieldOffset = 10, DataLengthOffset = 12, ResponseNameOffset = 16, ResponseDataOffset = 24;
+    internal const int HeaderSize = 16;
+    internal const int NextOffset = 0;
+    internal const int NameOffsetFieldOffset = 4;
+    internal const int NameLengthOffset = 6;
+    internal const int DataOffsetFieldOffset = 10;
+    internal const int DataLengthOffset = 12;
+    internal const int ResponseNameOffset = 16;
+    internal const int ResponseDataOffset = 24;
     internal const int TagSize = 4;
 }
 
 internal static class Smb2QueryMaximalAccessResponse
 {
-    internal const int Size = 8, MaximalAccessOffset = 4;
+    internal const int Size = 8;
+    internal const int MaximalAccessOffset = 4;
 }
 
 internal static class Smb2QueryOnDiskIdResponse
 {
-    internal const int Size = 32, DiskFileIdOffset = 0, VolumeIdOffset = 8, IdentifierSize = 8;
+    internal const int Size = 32;
+    internal const int DiskFileIdOffset = 0;
+    internal const int VolumeIdOffset = 8;
+    internal const int IdentifierSize = 8;
 }
 
 internal static class Smb2CloseRequest
 {
-    internal const int FixedSize = 24, StructureSize = 24, FlagsOffset = 2, FileIdOffset = 8;
+    internal const int FixedSize = 24;
+    internal const int StructureSize = 24;
+    internal const int FlagsOffset = 2;
+    internal const int FileIdOffset = 8;
 }
 
 internal static class Smb2CloseResponse
 {
-    internal const int FixedSize = 60, StructureSize = 60, FlagsOffset = 2, CreationTimeOffset = 8;
+    internal const int FixedSize = 60;
+    internal const int StructureSize = 60;
+    internal const int FlagsOffset = 2;
+    internal const int CreationTimeOffset = 8;
 }
 
 internal static class Smb2FlushRequest
 {
-    internal const int FixedSize = 24, StructureSize = 24, FileIdOffset = 8;
+    internal const int FixedSize = 24;
+    internal const int StructureSize = 24;
+    internal const int FileIdOffset = 8;
 }
 
 internal static class Smb2ReadRequest
 {
-    internal const int FixedSize = 48, StructureSize = 49, LengthOffset = 4, OffsetFieldOffset = 8,
-        FileIdOffset = 16, MinimumCountOffset = 32, ChannelOffset = 36, ReadChannelInfoLengthOffset = 46;
+    internal const int FixedSize = 48;
+    internal const int StructureSize = 49;
+    internal const int LengthOffset = 4;
+    internal const int OffsetFieldOffset = 8;
+    internal const int FileIdOffset = 16;
+    internal const int MinimumCountOffset = 32;
+    internal const int ChannelOffset = 36;
+    internal const int ReadChannelInfoLengthOffset = 46;
 }
 
 internal static class Smb2ReadResponse
 {
-    internal const int FixedSize = 16, StructureSize = 17, DataOffsetFieldOffset = 2, DataLengthOffset = 4;
+    internal const int FixedSize = 16;
+    internal const int StructureSize = 17;
+    internal const int DataOffsetFieldOffset = 2;
+    internal const int DataLengthOffset = 4;
 }
 
 internal static class Smb2WriteRequest
 {
-    internal const int FixedSize = 48, StructureSize = 49, DataOffsetFieldOffset = 2, LengthOffset = 4,
-        OffsetFieldOffset = 8, FileIdOffset = 16, ChannelOffset = 32, WriteChannelInfoLengthOffset = 42, FlagsOffset = 44;
+    internal const int FixedSize = 48;
+    internal const int StructureSize = 49;
+    internal const int DataOffsetFieldOffset = 2;
+    internal const int LengthOffset = 4;
+    internal const int OffsetFieldOffset = 8;
+    internal const int FileIdOffset = 16;
+    internal const int ChannelOffset = 32;
+    internal const int WriteChannelInfoLengthOffset = 42;
+    internal const int FlagsOffset = 44;
 }
 
 internal static class Smb2WriteResponse
 {
-    internal const int FixedSize = 16, StructureSize = 17, CountOffset = 4;
+    internal const int FixedSize = 16;
+    internal const int StructureSize = 17;
+    internal const int CountOffset = 4;
 }
 
 internal static class Smb2IoctlRequest
 {
-    internal const int FixedSize = 56, StructureSize = 57, CtlCodeOffset = 4, FileIdOffset = 8,
-        InputOffsetFieldOffset = 24, InputCountOffset = 28, MaxOutputResponseOffset = 44;
+    internal const int FixedSize = 56;
+    internal const int StructureSize = 57;
+    internal const int CtlCodeOffset = 4;
+    internal const int FileIdOffset = 8;
+    internal const int InputOffsetFieldOffset = 24;
+    internal const int InputCountOffset = 28;
+    internal const int MaxOutputResponseOffset = 44;
 }
 
 internal static class Smb2IoctlResponse
 {
-    internal const int FixedSize = 48, StructureSize = 49, CtlCodeOffset = 4, FileIdOffset = 8,
-        OutputOffsetFieldOffset = 32, OutputCountOffset = 36;
+    internal const int FixedSize = 48;
+    internal const int StructureSize = 49;
+    internal const int CtlCodeOffset = 4;
+    internal const int FileIdOffset = 8;
+    internal const int OutputOffsetFieldOffset = 32;
+    internal const int OutputCountOffset = 36;
 }
 
 internal static class Smb2QueryDirectoryRequest
 {
-    internal const int FixedSize = 32, StructureSize = 33, FileInformationClassOffset = 2, FlagsOffset = 3,
-        FileIdOffset = 8, FileNameOffsetFieldOffset = 24, FileNameLengthOffset = 26, OutputBufferLengthOffset = 28;
+    internal const int FixedSize = 32;
+    internal const int StructureSize = 33;
+    internal const int FileInformationClassOffset = 2;
+    internal const int FlagsOffset = 3;
+    internal const int FileIdOffset = 8;
+    internal const int FileNameOffsetFieldOffset = 24;
+    internal const int FileNameLengthOffset = 26;
+    internal const int OutputBufferLengthOffset = 28;
 }
 
 internal static class Smb2QueryInfoRequest
 {
-    internal const int FixedSize = 40, StructureSize = 41, InfoTypeOffset = 2, FileInfoClassOffset = 3,
-        OutputBufferLengthOffset = 4, InputBufferOffsetFieldOffset = 8, InputBufferLengthOffset = 12, FileIdOffset = 24;
+    internal const int FixedSize = 40;
+    internal const int StructureSize = 41;
+    internal const int InfoTypeOffset = 2;
+    internal const int FileInfoClassOffset = 3;
+    internal const int OutputBufferLengthOffset = 4;
+    internal const int InputBufferOffsetFieldOffset = 8;
+    internal const int InputBufferLengthOffset = 12;
+    internal const int FileIdOffset = 24;
 }
 
 // QUERY_INFO and QUERY_DIRECTORY responses share this buffer descriptor layout.
 internal static class Smb2QueryResponse
 {
-    internal const int FixedSize = 8, StructureSize = 9, OutputBufferOffsetFieldOffset = 2, OutputBufferLengthOffset = 4;
+    internal const int FixedSize = 8;
+    internal const int StructureSize = 9;
+    internal const int OutputBufferOffsetFieldOffset = 2;
+    internal const int OutputBufferLengthOffset = 4;
 }
 
 internal static class Smb2SetInfoRequest
 {
-    internal const int FixedSize = 32, StructureSize = 33, InfoTypeOffset = 2, FileInfoClassOffset = 3,
-        BufferLengthOffset = 4, BufferOffsetFieldOffset = 8, FileIdOffset = 16;
+    internal const int FixedSize = 32;
+    internal const int StructureSize = 33;
+    internal const int InfoTypeOffset = 2;
+    internal const int FileInfoClassOffset = 3;
+    internal const int BufferLengthOffset = 4;
+    internal const int BufferOffsetFieldOffset = 8;
+    internal const int FileIdOffset = 16;
 }
 
 internal static class Smb2SetInfoResponse
 {
-    internal const int FixedSize = 2, StructureSize = 2;
+    internal const int FixedSize = 2;
+    internal const int StructureSize = 2;
 }
 
 // LOGOFF/TREE_DISCONNECT/ECHO messages, CANCEL requests and FLUSH responses share this layout.
 internal static class Smb2SimpleMessage
 {
-    internal const int FixedSize = 4, StructureSize = 4;
+    internal const int FixedSize = 4;
+    internal const int StructureSize = 4;
 }
 
 internal static class Smb2ErrorResponse
 {
-    internal const int MinimumSize = 9, StructureSize = 9;
+    internal const int MinimumSize = 9;
+    internal const int StructureSize = 9;
 }
 
 internal static class Smb3Cryptography
 {
-    internal const int PreauthHashSize = 64, SessionKeySize = 16, AesBlockSize = 16,
-        GcmNonceSize = 12, CcmNonceSize = 11, NonceCounterSize = sizeof(ulong);
-    internal const string SigningKeyLabel = "SMBSigningKey", ServerToClientCipherKeyLabel = "SMBS2CCipherKey",
-        ClientToServerCipherKeyLabel = "SMBC2SCipherKey";
+    internal const int PreauthHashSize = 64;
+    internal const int SessionKeySize = 16;
+    internal const int AesBlockSize = 16;
+    internal const int GcmNonceSize = 12;
+    internal const int CcmNonceSize = 11;
+    internal const int NonceCounterSize = sizeof(ulong);
+    internal const string SigningKeyLabel = "SMBSigningKey";
+    internal const string ServerToClientCipherKeyLabel = "SMBS2CCipherKey";
+    internal const string ClientToServerCipherKeyLabel = "SMBC2SCipherKey";
 }
 
+// The length following the session-message byte is a 24-bit big-endian integer.
 internal static class DirectTcpTransport
 {
     internal const int HeaderSize = 4;
