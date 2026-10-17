@@ -80,6 +80,9 @@ jobs:
     if: github.ref == 'refs/heads/deploy' && needs.build-test.outputs.release-changed == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: nuget
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - name: Verify release branch and version
@@ -95,12 +98,17 @@ jobs:
         with:
           name: nuget-packages
           path: ${{ runner.temp }}/smb-release/packages
+      - name: Authenticate to NuGet with Trusted Publishing
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER || 'tedd' }}
       - name: Publish package and symbols
         shell: pwsh
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) { throw 'Set NUGET_API_KEY in this repository or its nuget environment.' }
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) { throw 'NuGet Trusted Publishing did not return a temporary API key.' }
           $packages = @(Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/smb-release/packages" -Filter '*.nupkg')
           if ($packages.Count -ne 1) { throw 'Expected exactly one NuGet package.' }
           dotnet nuget push $packages[0].FullName --source https://api.nuget.org/v3/index.json --api-key $env:NUGET_API_KEY --skip-duplicate

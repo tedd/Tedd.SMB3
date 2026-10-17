@@ -190,8 +190,14 @@ its README and a separate symbol package.
 
 NuGet publication runs from `deploy` when the project version changes, when
 that branch is first created, or through an explicit workflow dispatch on
-`deploy`. Configure `NUGET_API_KEY` as a repository secret or in the `nuget`
-environment, scoped to publishing `Tedd.Smb` on NuGet.org.
+`deploy`. Authentication uses [NuGet Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing)
+through GitHub Actions OIDC. Configure the NuGet.org policy for repository
+owner `tedd`, repository `Tedd.SMB3`, workflow file `nuget-publish.yml`, and
+environment `nuget`, with permission to publish `Tedd.Smb` (including its
+initial release). The NuGet account defaults to `tedd`; set the `NUGET_USER`
+repository or environment variable to use another account. The publishing job
+requests a temporary credential through `NuGet/login`; no API-key secret is
+required.
 
 The Pages workflow publishes `site/` from `deploy`. In repository Settings →
 Pages, select GitHub Actions as the source. The public site is
