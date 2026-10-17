@@ -9,6 +9,13 @@ namespace Tedd.Smb;
 internal static class FileMetadata
 {
     private const string TimesAttribute = "user.tedd.smb3.times", DosAttribute = "user.tedd.smb3.dos";
+    private static class StoredTimes
+    {
+        internal const int Size = 16, CreationTimeOffset = 0, ChangeTimeOffset = 8;
+    }
+    private const uint StoredDosAttributes = FileAttributeFlags.Hidden | FileAttributeFlags.Archive;
+    private const uint ReportedDosAttributes = FileAttributeFlags.ReadOnly | FileAttributeFlags.Hidden |
+        FileAttributeFlags.System | FileAttributeFlags.Directory | FileAttributeFlags.Archive;
     [DllImport("libc", SetLastError = true)]
     private static extern int statx(int dirfd, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags, uint mask, [Out] byte[] info);
     [DllImport("libc", SetLastError = true)]
@@ -29,68 +36,72 @@ internal static class FileMetadata
         var value = new byte[length]; nint n = getxattr(path, name, value, (nuint)length);
         if (n == length) return value;
         int error = Marshal.GetLastPInvokeError();
-        if (n < 0 && error is 61 or 95) return null; // ENODATA / ENOTSUP
-        if (n >= 0 || error == 34) throw new IOException("Invalid SMB filesystem metadata.");
+        if (n < 0 && error is LinuxError.NoData or LinuxError.NotSupported) return null; // ENODATA / ENOTSUP
+        if (n >= 0 || error == LinuxError.Range) throw new IOException("Invalid SMB filesystem metadata.");
         throw new IOException("Cannot read SMB filesystem metadata.", new Win32Exception(error));
     }
     private static void Store(string path, string name, byte[] value)
     {
         if (setxattr(path, name, value, (nuint)value.Length, 0) == 0) return;
         int error = Marshal.GetLastPInvokeError();
-        if (error == 95) throw new SmbException(Status.NotSupported);
+        if (error == LinuxError.NotSupported) throw new SmbException(NtStatus.NotSupported);
         throw new IOException("Cannot persist SMB filesystem metadata.", new Win32Exception(error));
     }
     internal static byte[] Identity(string path)
     {
         if (OperatingSystem.IsLinux())
         {
-            var info = new byte[256]; if (statx(-100, path, 0x100, 0x7ff, info) != 0) throw new IOException("Cannot query file identity.", new Win32Exception(Marshal.GetLastPInvokeError()));
-            var identity = Wire.Join(info[136..144], info[32..40]); return SHA256.HashData(identity)[..8];
+            var info = new byte[LinuxStatx.Size]; if (statx(LinuxStatx.AtFdcwd, path, LinuxStatx.AtSymlinkNoFollow, LinuxStatx.BasicStatsMask, info) != 0) throw new IOException("Cannot query file identity.", new Win32Exception(Marshal.GetLastPInvokeError()));
+            var identity = Wire.Join(info.AsSpan(LinuxStatx.DeviceIdOffset, LinuxStatx.DeviceIdSize).ToArray(), info.AsSpan(LinuxStatx.InodeOffset, sizeof(ulong)).ToArray()); return SHA256.HashData(identity)[..FileInternalInformation.Size];
         }
         if (OperatingSystem.IsWindows())
         {
-            using var h = CreateFileW(path, 0, 7, 0, 3, 0x02200000, 0); if (h.IsInvalid) throw new IOException("Cannot open file identity.", new Win32Exception(Marshal.GetLastPInvokeError()));
-            var info = new byte[24]; if (!GetFileInformationByHandleEx(h, 18, info, 24)) throw new IOException("Cannot query file identity.", new Win32Exception(Marshal.GetLastPInvokeError()));
-            return SHA256.HashData(info)[..8];
+            using var h = CreateFileW(path, 0, FileShareAccess.All, 0, WindowsCreationDisposition.OpenExisting, WindowsFileFlags.BackupSemantics | WindowsFileFlags.OpenReparsePoint, 0); if (h.IsInvalid) throw new IOException("Cannot open file identity.", new Win32Exception(Marshal.GetLastPInvokeError()));
+            var info = new byte[WindowsFileIdInfo.Size]; if (!GetFileInformationByHandleEx(h, WindowsFileInfoClass.FileIdInfo, info, WindowsFileIdInfo.Size)) throw new IOException("Cannot query file identity.", new Win32Exception(Marshal.GetLastPInvokeError()));
+            return SHA256.HashData(info)[..FileInternalInformation.Size];
         }
-        return SHA256.HashData(Encoding.UTF8.GetBytes(path))[..8];
+        return SHA256.HashData(Encoding.UTF8.GetBytes(path))[..FileInternalInformation.Size];
     }
     internal static void Times(byte[] b, int p, string path, FileSystemInfo info)
     {
         if (OperatingSystem.IsWindows())
         {
-            using var handle = CreateFileW(path, 0, 7, 0, 3, 0x02200000, 0); var basic = new byte[40];
-            if (handle.IsInvalid || !GetFileInformationByHandleEx(handle, 0, basic, 40)) throw new IOException("Cannot query file timestamps.", new Win32Exception(Marshal.GetLastPInvokeError()));
-            basic.AsSpan(0, 32).CopyTo(b.AsSpan(p)); return;
+            using var handle = CreateFileW(path, 0, FileShareAccess.All, 0, WindowsCreationDisposition.OpenExisting, WindowsFileFlags.BackupSemantics | WindowsFileFlags.OpenReparsePoint, 0); var basic = new byte[FileBasicInformation.Size];
+            if (handle.IsInvalid || !GetFileInformationByHandleEx(handle, WindowsFileInfoClass.FileBasicInfo, basic, FileBasicInformation.Size)) throw new IOException("Cannot query file timestamps.", new Win32Exception(Marshal.GetLastPInvokeError()));
+            basic.AsSpan(0, FileBasicInformation.FileAttributesOffset).CopyTo(b.AsSpan(p)); return;
         }
         ulong creation = (ulong)info.CreationTimeUtc.ToFileTimeUtc(), change = (ulong)info.LastWriteTimeUtc.ToFileTimeUtc();
         if (OperatingSystem.IsLinux())
         {
-            var stat = new byte[256];
-            if (statx(-100, path, 0x100, 0x7ff, stat) != 0) throw new IOException("Cannot query timestamps.", new Win32Exception(Marshal.GetLastPInvokeError()));
-            change = checked((ulong)(DateTimeOffset.FromUnixTimeSeconds(checked((long)Wire.U64(stat, 96))).UtcDateTime.ToFileTimeUtc() + Wire.U32(stat, 104) / 100));
-            var metadata = Attribute(path, TimesAttribute, 16);
-            if (metadata != null) { creation = Wire.U64(metadata, 0); change = Wire.U64(metadata, 8); }
+            var stat = new byte[LinuxStatx.Size];
+            if (statx(LinuxStatx.AtFdcwd, path, LinuxStatx.AtSymlinkNoFollow, LinuxStatx.BasicStatsMask, stat) != 0) throw new IOException("Cannot query timestamps.", new Win32Exception(Marshal.GetLastPInvokeError()));
+            change = checked((ulong)(DateTimeOffset.FromUnixTimeSeconds(checked((long)Wire.ReadUInt64LittleEndian(stat, LinuxStatx.ChangeTimeSecondsOffset))).UtcDateTime.ToFileTimeUtc() + Wire.ReadUInt32LittleEndian(stat, LinuxStatx.ChangeTimeNanosecondsOffset) / TimeSpan.NanosecondsPerTick));
+            var metadata = Attribute(path, TimesAttribute, StoredTimes.Size);
+            if (metadata != null) { creation = Wire.ReadUInt64LittleEndian(metadata, StoredTimes.CreationTimeOffset); change = Wire.ReadUInt64LittleEndian(metadata, StoredTimes.ChangeTimeOffset); }
         }
-        Wire.W64(b, p, creation); Wire.W64(b, p + 8, (ulong)info.LastAccessTimeUtc.ToFileTimeUtc());
-        Wire.W64(b, p + 16, (ulong)info.LastWriteTimeUtc.ToFileTimeUtc()); Wire.W64(b, p + 24, change);
+        Wire.WriteUInt64LittleEndian(b, p, creation);
+        Wire.WriteUInt64LittleEndian(b, p + FileBasicInformation.LastAccessTimeOffset, (ulong)info.LastAccessTimeUtc.ToFileTimeUtc());
+        Wire.WriteUInt64LittleEndian(b, p + FileBasicInformation.LastWriteTimeOffset, (ulong)info.LastWriteTimeUtc.ToFileTimeUtc());
+        Wire.WriteUInt64LittleEndian(b, p + FileBasicInformation.ChangeTimeOffset, change);
     }
     internal static void SetTimes(string path, ReadOnlySpan<byte> data)
     {
-        var values = new DateTime?[4];
-        for (int i = 0; i < 4; i++) { ulong t = Wire.U64(data, i * 8); if (t is not (0 or ulong.MaxValue)) values[i] = DateTime.FromFileTimeUtc(checked((long)t)); }
+        var values = new DateTime?[FileBasicInformation.TimestampCount];
+        for (int i = 0; i < FileBasicInformation.TimestampCount; i++) { ulong t = Wire.ReadUInt64LittleEndian(data, i * sizeof(ulong)); if (t is not (0 or ulong.MaxValue)) values[i] = DateTime.FromFileTimeUtc(checked((long)t)); }
         if (OperatingSystem.IsWindows())
         {
-            using var handle = CreateFileW(path, 0x100, 7, 0, 3, 0x02200000, 0);
+            using var handle = CreateFileW(path, FileAccessMask.WriteAttributes, FileShareAccess.All, 0, WindowsCreationDisposition.OpenExisting, WindowsFileFlags.BackupSemantics | WindowsFileFlags.OpenReparsePoint, 0);
             if (handle.IsInvalid) throw new IOException("Cannot open file timestamps.", new Win32Exception(Marshal.GetLastPInvokeError()));
-            var basic = new byte[40]; data[..32].CopyTo(basic);
-            if (!SetFileInformationByHandle(handle, 0, basic, 40)) throw new IOException("Cannot set file timestamps.", new Win32Exception(Marshal.GetLastPInvokeError()));
+            var basic = new byte[FileBasicInformation.Size]; data[..FileBasicInformation.FileAttributesOffset].CopyTo(basic);
+            if (!SetFileInformationByHandle(handle, WindowsFileInfoClass.FileBasicInfo, basic, FileBasicInformation.Size)) throw new IOException("Cannot set file timestamps.", new Win32Exception(Marshal.GetLastPInvokeError()));
             return;
         }
         if (OperatingSystem.IsLinux() && (values[0] != null || values[3] != null))
         {
-            var b = new byte[32]; Times(b, 0, path, Directory.Exists(path) ? new DirectoryInfo(path) : new FileInfo(path));
-            var stored = new byte[16]; Wire.W64(stored, 0, values[0] is { } c ? (ulong)c.ToFileTimeUtc() : Wire.U64(b, 0)); Wire.W64(stored, 8, values[3] is { } ch ? (ulong)ch.ToFileTimeUtc() : Wire.U64(b, 24)); Store(path, TimesAttribute, stored);
+            var b = new byte[FileBasicInformation.FileAttributesOffset]; Times(b, 0, path, Directory.Exists(path) ? new DirectoryInfo(path) : new FileInfo(path));
+            var stored = new byte[StoredTimes.Size];
+            Wire.WriteUInt64LittleEndian(stored, StoredTimes.CreationTimeOffset, values[0] is { } c ? (ulong)c.ToFileTimeUtc() : Wire.ReadUInt64LittleEndian(b, FileBasicInformation.CreationTimeOffset));
+            Wire.WriteUInt64LittleEndian(stored, StoredTimes.ChangeTimeOffset, values[3] is { } ch ? (ulong)ch.ToFileTimeUtc() : Wire.ReadUInt64LittleEndian(b, FileBasicInformation.ChangeTimeOffset)); Store(path, TimesAttribute, stored);
         }
         else if (values[0] is { } creation) File.SetCreationTimeUtc(path, creation);
         if (values[1] is { } access) File.SetLastAccessTimeUtc(path, access);
@@ -98,38 +109,39 @@ internal static class FileMetadata
     }
     internal static uint Attributes(string path, FileSystemInfo info)
     {
-        uint value = (uint)info.Attributes & 0x37u;
-        if (OperatingSystem.IsLinux()) { var stored = Attribute(path, DosAttribute, 4); if (stored != null) value = (value & ~0x22u) | (Wire.U32(stored, 0) & 0x22); }
-        return value == 0 ? 0x80 : value;
+        uint value = (uint)info.Attributes & ReportedDosAttributes;
+        if (OperatingSystem.IsLinux()) { var stored = Attribute(path, DosAttribute, sizeof(uint)); if (stored != null) value = (value & ~StoredDosAttributes) | (Wire.ReadUInt32LittleEndian(stored, 0) & StoredDosAttributes); }
+        return value == 0 ? FileAttributeFlags.Normal : value;
     }
     internal static void SetAttributes(string path, uint attributes, bool directory)
     {
-        if ((attributes & ~0xb3u) != 0) throw new SmbException(Status.NotSupported);
-        File.SetAttributes(path, (FileAttributes)(attributes & ~0x80u) | (directory ? FileAttributes.Directory : 0));
+        if ((attributes & ~SmbLimits.SupportedFileAttributes) != 0) throw new SmbException(NtStatus.NotSupported);
+        File.SetAttributes(path, (FileAttributes)(attributes & ~FileAttributeFlags.Normal) | (directory ? FileAttributes.Directory : 0));
         if (OperatingSystem.IsLinux())
         {
-            var b = new byte[4]; Wire.W32(b, 0, attributes & 0x22);
+            var b = new byte[sizeof(uint)];
+            Wire.WriteUInt32LittleEndian(b, 0, attributes & StoredDosAttributes);
             try { Store(path, DosAttribute, b); }
-            catch (SmbException e) when (e.NtStatus == Status.NotSupported && ((uint)File.GetAttributes(path) & 0x22) == (attributes & 0x22)) { }
+            catch (SmbException e) when (e.NtStatus == NtStatus.NotSupported && ((uint)File.GetAttributes(path) & StoredDosAttributes) == (attributes & StoredDosAttributes)) { }
         }
     }
     internal static void Changed(string path, bool archive = false)
     {
         if (!OperatingSystem.IsLinux()) return;
-        var times = Attribute(path, TimesAttribute, 16);
-        if (times != null) { Wire.W64(times, 8, (ulong)DateTime.UtcNow.ToFileTimeUtc()); Store(path, TimesAttribute, times); }
-        if (archive && !Directory.Exists(path)) SetAttributes(path, Attributes(path, new FileInfo(path)) | 0x20, false);
+        var times = Attribute(path, TimesAttribute, StoredTimes.Size);
+        if (times != null) { Wire.WriteUInt64LittleEndian(times, StoredTimes.ChangeTimeOffset, (ulong)DateTime.UtcNow.ToFileTimeUtc()); Store(path, TimesAttribute, times); }
+        if (archive && !Directory.Exists(path)) SetAttributes(path, Attributes(path, new FileInfo(path)) | FileAttributeFlags.Archive, false);
     }
     internal static uint LinkCount(string path)
     {
         if (OperatingSystem.IsLinux())
         {
-            var info = new byte[256]; if (statx(-100, path, 0x100, 0x7ff, info) != 0) throw new IOException("Cannot query file links.", new Win32Exception(Marshal.GetLastPInvokeError())); return Wire.U32(info, 16);
+            var info = new byte[LinuxStatx.Size]; if (statx(LinuxStatx.AtFdcwd, path, LinuxStatx.AtSymlinkNoFollow, LinuxStatx.BasicStatsMask, info) != 0) throw new IOException("Cannot query file links.", new Win32Exception(Marshal.GetLastPInvokeError())); return Wire.ReadUInt32LittleEndian(info, LinuxStatx.LinkCountOffset);
         }
         if (OperatingSystem.IsWindows())
         {
-            using var h = CreateFileW(path, 0, 7, 0, 3, 0x02200000, 0); var info = new byte[24];
-            if (h.IsInvalid || !GetFileInformationByHandleEx(h, 1, info, 24)) throw new IOException("Cannot query file links.", new Win32Exception(Marshal.GetLastPInvokeError())); return Wire.U32(info, 16);
+            using var h = CreateFileW(path, 0, FileShareAccess.All, 0, WindowsCreationDisposition.OpenExisting, WindowsFileFlags.BackupSemantics | WindowsFileFlags.OpenReparsePoint, 0); var info = new byte[FileStandardInformation.Size];
+            if (h.IsInvalid || !GetFileInformationByHandleEx(h, WindowsFileInfoClass.FileStandardInfo, info, FileStandardInformation.Size)) throw new IOException("Cannot query file links.", new Win32Exception(Marshal.GetLastPInvokeError())); return Wire.ReadUInt32LittleEndian(info, FileStandardInformation.NumberOfLinksOffset);
         }
         return 1;
     }

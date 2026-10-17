@@ -4,41 +4,69 @@ namespace Tedd.Smb;
 
 internal static class Negotiation
 {
+    internal const int BaseContextCount = 2, ContextCountWithSigning = BaseContextCount + 1;
     internal static byte[] Context(int type, byte[] data)
     {
-        var b = new byte[Wire.Align(8 + data.Length)]; Wire.W16(b, 0, type); Wire.W16(b, 2, data.Length); data.CopyTo(b, 8); return b;
+        var b = new byte[Wire.Align(Smb2NegotiateContext.HeaderSize + data.Length)];
+        Wire.WriteUInt16LittleEndian(b, Smb2NegotiateContext.ContextTypeOffset, type);
+        Wire.WriteUInt16LittleEndian(b, Smb2NegotiateContext.DataLengthOffset, data.Length);
+        data.CopyTo(b, Smb2NegotiateContext.HeaderSize);
+        return b;
     }
-    internal static byte[] Contexts(bool signing = true, int cipher = 2, bool offerBoth = false)
+    internal static byte[] Contexts(bool signing = true, int cipher = Smb2Cipher.Aes128Gcm, bool offerBoth = false)
     {
-        var preauth = new byte[38]; Wire.W16(preauth, 0, 1); Wire.W16(preauth, 2, 32); Wire.W16(preauth, 4, 1); RandomNumberGenerator.Fill(preauth.AsSpan(6));
-        return Wire.Join(Context(1, preauth), Context(2, offerBoth ? new byte[] { 2, 0, 2, 0, 1, 0 } : new byte[] { 1, 0, (byte)cipher, 0 }), signing ? Context(8, new byte[] { 1, 0, 1, 0 }) : []);
+        int saltOffset = Smb2PreauthIntegrityCapabilities.HashAlgorithmsOffset + sizeof(ushort);
+        var preauth = new byte[saltOffset + SmbLimits.PreauthSaltSize];
+        Wire.WriteUInt16LittleEndian(preauth, Smb2PreauthIntegrityCapabilities.HashAlgorithmCountOffset, 1);
+        Wire.WriteUInt16LittleEndian(preauth, Smb2PreauthIntegrityCapabilities.SaltLengthOffset, SmbLimits.PreauthSaltSize);
+        Wire.WriteUInt16LittleEndian(preauth, Smb2PreauthIntegrityCapabilities.HashAlgorithmsOffset, Smb2PreauthHashAlgorithm.Sha512);
+        RandomNumberGenerator.Fill(preauth.AsSpan(saltOffset));
+        var encryption = Algorithms(offerBoth ? [Smb2Cipher.Aes128Gcm, Smb2Cipher.Aes128Ccm] : [checked((ushort)cipher)]);
+        return Wire.Join(
+            Context(Smb2NegotiateContextType.PreauthIntegrityCapabilities, preauth),
+            Context(Smb2NegotiateContextType.EncryptionCapabilities, encryption),
+            signing ? Context(Smb2NegotiateContextType.SigningCapabilities, Algorithms([Smb2SigningAlgorithm.AesCmac])) : []);
+    }
+    private static byte[] Algorithms(ushort[] algorithms)
+    {
+        var data = new byte[Smb2AlgorithmCapabilities.AlgorithmsOffset + algorithms.Length * sizeof(ushort)];
+        Wire.WriteUInt16LittleEndian(data, Smb2AlgorithmCapabilities.AlgorithmCountOffset, algorithms.Length);
+        for (int i = 0; i < algorithms.Length; i++)
+            Wire.WriteUInt16LittleEndian(data, Smb2AlgorithmCapabilities.AlgorithmsOffset + i * sizeof(ushort), algorithms[i]);
+        return data;
     }
     internal static (bool Signing, int Cipher) ValidateContexts(byte[] packet, int offset, int count, bool response)
     {
-        if (count is < 1 or > 32 || offset < 100 || (offset & 7) != 0) throw new SmbException(Status.InvalidParameter);
-        bool hash = false, signing = false; int cipher = 0; var seen = new HashSet<ushort>();
+        if (count is < 1 or > SmbLimits.MaxNegotiateContexts || offset < Smb2Header.Size + Smb2NegotiateRequest.FixedSize || (offset & 7) != 0) throw new SmbException(NtStatus.InvalidParameter);
+        bool hash = false, signing = false; int cipher = Smb2Cipher.None; var seen = new HashSet<ushort>();
         for (int i = 0; i < count; i++)
         {
-            var h = Wire.Slice(packet, offset, 8); ushort type = Wire.U16(h, 0); int n = Wire.U16(h, 2); var data = Wire.Slice(packet, offset + 8, n);
-            if (!seen.Add(type)) throw new SmbException(Status.InvalidParameter);
-            if (type is 1 or 2 or 8)
+            var h = Wire.Slice(packet, offset, Smb2NegotiateContext.HeaderSize);
+            ushort type = Wire.ReadUInt16LittleEndian(h, Smb2NegotiateContext.ContextTypeOffset);
+            int n = Wire.ReadUInt16LittleEndian(h, Smb2NegotiateContext.DataLengthOffset);
+            var data = Wire.Slice(packet, offset + Smb2NegotiateContext.HeaderSize, n);
+            if (!seen.Add(type)) throw new SmbException(NtStatus.InvalidParameter);
+            if (type is Smb2NegotiateContextType.PreauthIntegrityCapabilities or Smb2NegotiateContextType.EncryptionCapabilities or Smb2NegotiateContextType.SigningCapabilities)
             {
-                int number = Wire.U16(data, 0), start = type == 1 ? 4 : 2;
-                if (number < 1 || (response && number != 1)) throw new SmbException(Status.NotSupported);
-                var values = Wire.Slice(data, start, checked(number * 2)); bool match = false;
+                int number = Wire.ReadUInt16LittleEndian(data, Smb2AlgorithmCapabilities.AlgorithmCountOffset);
+                int start = type == Smb2NegotiateContextType.PreauthIntegrityCapabilities
+                    ? Smb2PreauthIntegrityCapabilities.HashAlgorithmsOffset : Smb2AlgorithmCapabilities.AlgorithmsOffset;
+                if (number < 1 || (response && number != 1)) throw new SmbException(NtStatus.NotSupported);
+                var values = Wire.Slice(data, start, checked(number * sizeof(ushort))); bool match = false;
                 for (int j = 0; j < number; j++)
                 {
-                    int algorithm = Wire.U16(values, j * 2);
-                    if (type == 2 && algorithm is 1 or 2) { cipher = Math.Max(cipher, algorithm); match = true; }
-                    else if (type != 2 && algorithm == 1) match = true;
+                    int algorithm = Wire.ReadUInt16LittleEndian(values, j * sizeof(ushort));
+                    if (type == Smb2NegotiateContextType.EncryptionCapabilities && algorithm is Smb2Cipher.Aes128Ccm or Smb2Cipher.Aes128Gcm) { cipher = Math.Max(cipher, algorithm); match = true; }
+                    else if (type == Smb2NegotiateContextType.PreauthIntegrityCapabilities && algorithm == Smb2PreauthHashAlgorithm.Sha512) match = true;
+                    else if (type == Smb2NegotiateContextType.SigningCapabilities && algorithm == Smb2SigningAlgorithm.AesCmac) match = true;
                 }
-                if (!match) throw new SmbException(Status.NotSupported);
-                if (type == 1) { _ = Wire.Slice(data, start + number * 2, Wire.U16(data, 2)); hash = true; }
-                if (type == 8) signing = true;
+                if (!match) throw new SmbException(NtStatus.NotSupported);
+                if (type == Smb2NegotiateContextType.PreauthIntegrityCapabilities) { _ = Wire.Slice(data, start + number * sizeof(ushort), Wire.ReadUInt16LittleEndian(data, Smb2PreauthIntegrityCapabilities.SaltLengthOffset)); hash = true; }
+                if (type == Smb2NegotiateContextType.SigningCapabilities) signing = true;
             }
-            offset = checked(offset + Wire.Align(8 + n));
+            offset = checked(offset + Wire.Align(Smb2NegotiateContext.HeaderSize + n));
         }
-        if (!hash || cipher == 0) throw new SmbException(Status.NotSupported);
+        if (!hash || cipher == Smb2Cipher.None) throw new SmbException(NtStatus.NotSupported);
         return (signing, cipher);
     }
     internal static byte[] Hash(byte[] previous, byte[] packet) => SHA512.HashData(Wire.Join(previous, packet));

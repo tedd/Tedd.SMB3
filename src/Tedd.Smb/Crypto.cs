@@ -16,20 +16,24 @@ internal static class Crypto
         var x = new uint[16];
         foreach (var offset in Enumerable.Range(0, b.Length / 64).Select(i => i * 64))
         {
-            for (int i = 0; i < 16; i++) x[i] = Wire.U32(b, offset + i * 4);
+            for (int i = 0; i < 16; i++) x[i] = Wire.ReadUInt32LittleEndian(b, offset + i * 4);
             uint aa = a, bb = v, cc = c, dd = d;
             for (int round = 0; round < 3; round++)
-            for (int i = 0; i < 16; i++)
-            {
-                int k = round switch { 0 => i, 1 => (i % 4) * 4 + i / 4, _ => new[] { 0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15 }[i] };
-                int s = (round switch { 0 => new[] { 3, 7, 11, 19 }, 1 => new[] { 3, 5, 9, 13 }, _ => new[] { 3, 9, 11, 15 } })[i % 4];
-                uint f = round switch { 0 => (v & c) | (~v & d), 1 => (v & c) | (v & d) | (c & d), _ => v ^ c ^ d };
-                uint z = BitOperations.RotateLeft(unchecked(a + f + x[k] + (round switch { 1 => 0x5a827999u, 2 => 0x6ed9eba1u, _ => 0u })), s);
-                a = d; d = c; c = v; v = z;
-            }
+                for (int i = 0; i < 16; i++)
+                {
+                    int k = round switch { 0 => i, 1 => (i % 4) * 4 + i / 4, _ => new[] { 0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15 }[i] };
+                    int s = (round switch { 0 => new[] { 3, 7, 11, 19 }, 1 => new[] { 3, 5, 9, 13 }, _ => new[] { 3, 9, 11, 15 } })[i % 4];
+                    uint f = round switch { 0 => (v & c) | (~v & d), 1 => (v & c) | (v & d) | (c & d), _ => v ^ c ^ d };
+                    uint z = BitOperations.RotateLeft(unchecked(a + f + x[k] + (round switch { 1 => 0x5a827999u, 2 => 0x6ed9eba1u, _ => 0u })), s);
+                    a = d; d = c; c = v; v = z;
+                }
             a = unchecked(a + aa); v = unchecked(v + bb); c = unchecked(c + cc); d = unchecked(d + dd);
         }
-        var result = new byte[16]; Wire.W32(result, 0, a); Wire.W32(result, 4, v); Wire.W32(result, 8, c); Wire.W32(result, 12, d);
+        var result = new byte[16];
+        Wire.WriteUInt32LittleEndian(result, 0, a);
+        Wire.WriteUInt32LittleEndian(result, 4, v);
+        Wire.WriteUInt32LittleEndian(result, 8, c);
+        Wire.WriteUInt32LittleEndian(result, 12, d);
         CryptographicOperations.ZeroMemory(b); return result;
     }
     internal static byte[] Rc4(byte[] key, byte[] data)
@@ -76,42 +80,78 @@ internal static class Crypto
 internal sealed class SessionCrypto : IDisposable
 {
     private readonly byte[] signing, outgoing, incoming;
-    private readonly byte[] noncePrefix = RandomNumberGenerator.GetBytes(4);
+    private readonly byte[] noncePrefix = RandomNumberGenerator.GetBytes(Smb3Cryptography.GcmNonceSize - Smb3Cryptography.NonceCounterSize);
     private ulong nonce;
     private readonly int cipher;
-    internal SessionCrypto(byte[] sessionKey, byte[] preauth, bool server, int cipher = 2)
+    internal SessionCrypto(byte[] sessionKey, byte[] preauth, bool server, int cipher = Smb2Cipher.Aes128Gcm)
     {
         this.cipher = cipher;
-        signing = Crypto.Kdf(sessionKey, "SMBSigningKey", preauth);
-        outgoing = Crypto.Kdf(sessionKey, server ? "SMBS2CCipherKey" : "SMBC2SCipherKey", preauth);
-        incoming = Crypto.Kdf(sessionKey, server ? "SMBC2SCipherKey" : "SMBS2CCipherKey", preauth);
+        signing = Crypto.Kdf(sessionKey, Smb3Cryptography.SigningKeyLabel, preauth);
+        outgoing = Crypto.Kdf(sessionKey, server ? Smb3Cryptography.ServerToClientCipherKeyLabel : Smb3Cryptography.ClientToServerCipherKeyLabel, preauth);
+        incoming = Crypto.Kdf(sessionKey, server ? Smb3Cryptography.ClientToServerCipherKeyLabel : Smb3Cryptography.ServerToClientCipherKeyLabel, preauth);
     }
     internal void Sign(byte[] packet)
     {
-        Wire.W32(packet, 16, Wire.U32(packet, 16) | 8); packet.AsSpan(48, 16).Clear(); Crypto.Cmac(signing, packet).CopyTo(packet, 48);
+        Wire.WriteUInt32LittleEndian(packet, Smb2Header.FlagsOffset, Wire.ReadUInt32LittleEndian(packet, Smb2Header.FlagsOffset) | Smb2HeaderFlags.Signed);
+        packet.AsSpan(Smb2Header.SignatureOffset, Smb2Header.SignatureSize).Clear();
+        Crypto.Cmac(signing, packet).CopyTo(packet, Smb2Header.SignatureOffset);
     }
     internal void Verify(byte[] packet)
     {
-        var signature = packet[48..64]; var copy = (byte[])packet.Clone(); copy.AsSpan(48, 16).Clear();
-        if ((Wire.U32(packet, 16) & 8) == 0 || !CryptographicOperations.FixedTimeEquals(signature, Crypto.Cmac(signing, copy))) throw new SmbException(Status.AccessDenied);
+        var signature = packet[Smb2Header.SignatureOffset..Smb2Header.Size];
+        var copy = (byte[])packet.Clone(); copy.AsSpan(Smb2Header.SignatureOffset, Smb2Header.SignatureSize).Clear();
+        if ((Wire.ReadUInt32LittleEndian(packet, Smb2Header.FlagsOffset) & Smb2HeaderFlags.Signed) == 0 || !CryptographicOperations.FixedTimeEquals(signature, Crypto.Cmac(signing, copy))) throw new SmbException(NtStatus.AccessDenied);
     }
     internal byte[] Encrypt(byte[] packet, ulong session)
     {
-        var b = new byte[52 + packet.Length]; b[0] = 0xfd; b[1] = 0x53; b[2] = 0x4d; b[3] = 0x42;
-        int prefix = cipher == 2 ? 4 : 3;
-        noncePrefix.AsSpan(0, prefix).CopyTo(b.AsSpan(20)); if (nonce == ulong.MaxValue) throw new CryptographicException("Nonce exhausted.");
-        Wire.W64(b, 20 + prefix, ++nonce); Wire.W32(b, 36, (uint)packet.Length); Wire.W16(b, 42, 1); Wire.W64(b, 44, session);
-        if (cipher == 2) { using var aes = new AesGcm(outgoing, 16); aes.Encrypt(b.AsSpan(20, 12), packet, b.AsSpan(52), b.AsSpan(4, 16), b.AsSpan(20, 32)); }
-        else { using var aes = new AesCcm(outgoing); aes.Encrypt(b.AsSpan(20, 11), packet, b.AsSpan(52), b.AsSpan(4, 16), b.AsSpan(20, 32)); }
+        var b = new byte[Smb2TransformHeader.Size + packet.Length];
+        Wire.WriteUInt32LittleEndian(b, Smb2TransformHeader.ProtocolIdOffset, Smb2TransformHeader.ProtocolId);
+        int prefix = (cipher == Smb2Cipher.Aes128Gcm ? Smb3Cryptography.GcmNonceSize : Smb3Cryptography.CcmNonceSize) - Smb3Cryptography.NonceCounterSize;
+        noncePrefix.AsSpan(0, prefix).CopyTo(b.AsSpan(Smb2TransformHeader.NonceOffset));
+        if (nonce == ulong.MaxValue) throw new CryptographicException("Nonce exhausted.");
+        Wire.WriteUInt64LittleEndian(b, Smb2TransformHeader.NonceOffset + prefix, ++nonce);
+        Wire.WriteUInt32LittleEndian(b, Smb2TransformHeader.OriginalMessageSizeOffset, (uint)packet.Length);
+        Wire.WriteUInt16LittleEndian(b, Smb2TransformHeader.FlagsOffset, Smb2TransformHeader.Encrypted);
+        Wire.WriteUInt64LittleEndian(b, Smb2TransformHeader.SessionIdOffset, session);
+        if (cipher == Smb2Cipher.Aes128Gcm)
+        {
+            using var aes = new AesGcm(outgoing, Smb2TransformHeader.SignatureSize);
+            aes.Encrypt(b.AsSpan(Smb2TransformHeader.NonceOffset, Smb3Cryptography.GcmNonceSize), packet,
+                b.AsSpan(Smb2TransformHeader.Size), b.AsSpan(Smb2TransformHeader.SignatureOffset, Smb2TransformHeader.SignatureSize),
+                b.AsSpan(Smb2TransformHeader.AssociatedDataOffset, Smb2TransformHeader.AssociatedDataSize));
+        }
+        else
+        {
+            using var aes = new AesCcm(outgoing);
+            aes.Encrypt(b.AsSpan(Smb2TransformHeader.NonceOffset, Smb3Cryptography.CcmNonceSize), packet,
+                b.AsSpan(Smb2TransformHeader.Size), b.AsSpan(Smb2TransformHeader.SignatureOffset, Smb2TransformHeader.SignatureSize),
+                b.AsSpan(Smb2TransformHeader.AssociatedDataOffset, Smb2TransformHeader.AssociatedDataSize));
+        }
         return b;
     }
     internal byte[] Decrypt(byte[] packet, ulong session)
     {
-        if (packet.Length < 52 || !packet.AsSpan(0, 4).SequenceEqual(new byte[] { 0xfd, 0x53, 0x4d, 0x42 }) || Wire.U64(packet, 44) != session || Wire.U32(packet, 36) != packet.Length - 52 || Wire.U16(packet, 40) != 0 || Wire.U16(packet, 42) != 1)
-            throw new SmbException(Status.AccessDenied);
-        var result = new byte[packet.Length - 52];
-        if (cipher == 2) { using var aes = new AesGcm(incoming, 16); aes.Decrypt(packet.AsSpan(20, 12), packet.AsSpan(52), packet.AsSpan(4, 16), result, packet.AsSpan(20, 32)); }
-        else { using var aes = new AesCcm(incoming); aes.Decrypt(packet.AsSpan(20, 11), packet.AsSpan(52), packet.AsSpan(4, 16), result, packet.AsSpan(20, 32)); }
+        if (packet.Length < Smb2TransformHeader.Size || Wire.ReadUInt32LittleEndian(packet, Smb2TransformHeader.ProtocolIdOffset) != Smb2TransformHeader.ProtocolId ||
+            Wire.ReadUInt64LittleEndian(packet, Smb2TransformHeader.SessionIdOffset) != session ||
+            Wire.ReadUInt32LittleEndian(packet, Smb2TransformHeader.OriginalMessageSizeOffset) != packet.Length - Smb2TransformHeader.Size ||
+            Wire.ReadUInt16LittleEndian(packet, Smb2TransformHeader.ReservedOffset) != 0 ||
+            Wire.ReadUInt16LittleEndian(packet, Smb2TransformHeader.FlagsOffset) != Smb2TransformHeader.Encrypted)
+            throw new SmbException(NtStatus.AccessDenied);
+        var result = new byte[packet.Length - Smb2TransformHeader.Size];
+        if (cipher == Smb2Cipher.Aes128Gcm)
+        {
+            using var aes = new AesGcm(incoming, Smb2TransformHeader.SignatureSize);
+            aes.Decrypt(packet.AsSpan(Smb2TransformHeader.NonceOffset, Smb3Cryptography.GcmNonceSize), packet.AsSpan(Smb2TransformHeader.Size),
+                packet.AsSpan(Smb2TransformHeader.SignatureOffset, Smb2TransformHeader.SignatureSize), result,
+                packet.AsSpan(Smb2TransformHeader.AssociatedDataOffset, Smb2TransformHeader.AssociatedDataSize));
+        }
+        else
+        {
+            using var aes = new AesCcm(incoming);
+            aes.Decrypt(packet.AsSpan(Smb2TransformHeader.NonceOffset, Smb3Cryptography.CcmNonceSize), packet.AsSpan(Smb2TransformHeader.Size),
+                packet.AsSpan(Smb2TransformHeader.SignatureOffset, Smb2TransformHeader.SignatureSize), result,
+                packet.AsSpan(Smb2TransformHeader.AssociatedDataOffset, Smb2TransformHeader.AssociatedDataSize));
+        }
         return result;
     }
     public void Dispose() { CryptographicOperations.ZeroMemory(signing); CryptographicOperations.ZeroMemory(outgoing); CryptographicOperations.ZeroMemory(incoming); }

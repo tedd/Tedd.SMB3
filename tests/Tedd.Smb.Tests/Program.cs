@@ -21,7 +21,7 @@ async Task RoundTrip(string host, int port, string share, bool encrypt, string u
     {
         await client.WriteAllBytesAsync(original, data); Equal(data, await client.ReadAllBytesAsync(original), "multi-frame Unicode round trip");
         var entries = await client.ListDirectoryAsync(dir); if (entries.Count != 1 || entries[0].Length != data.Length) throw new Exception("Directory metadata mismatch."); Console.WriteLine("PASS directory metadata");
-        await client.MoveAsync(original, moved); await Reject(() => client.ReadAllBytesAsync(original), Status.NotFound, "rename removes old name");
+        await client.MoveAsync(original, moved); await Reject(() => client.ReadAllBytesAsync(original), NtStatus.ObjectNameNotFound, "rename removes old name");
         await using (var f = await client.OpenAsync(moved, FileMode.Open, FileAccess.ReadWrite))
         { await f.SetLengthAsync(17); await f.WriteAsync(new byte[] { 11, 12 }, 3); await f.FlushAsync(); }
         var small = data[..17]; small[3] = 11; small[4] = 12; Equal(small, await client.ReadAllBytesAsync(moved), "truncate and offset write");
@@ -30,7 +30,7 @@ async Task RoundTrip(string host, int port, string share, bool encrypt, string u
     finally
     {
         foreach (var name in new[] { original, moved })
-            try { await client.DeleteAsync(name); } catch (SmbException e) when (e.NtStatus == Status.NotFound) { }
+            try { await client.DeleteAsync(name); } catch (SmbException e) when (e.NtStatus == NtStatus.ObjectNameNotFound) { }
         await client.DeleteAsync(dir, true);
     }
 }
@@ -42,6 +42,15 @@ if (args.Length > 0 && args[0] == "client")
 }
 if (args.Length != 1 || !Path.IsPathFullyQualified(args[0])) throw new ArgumentException("Supply a dedicated absolute fixture directory under the task workspace.");
 string root = args[0]; Directory.CreateDirectory(root);
+// Literal fixtures deliberately remain independent of the protocol constants.
+Hex("FE534D4240000100000000000900200000000000000000000807060504030201FFFE000044332211887766554433221100000000000000000000000000000000",
+    Wire.Header(Smb2Command.Write, 0x0102030405060708, 0x1122334455667788, 0x11223344), "SMB2 header wire fixture");
+var contexts = Negotiation.Contexts();
+Hex("02000400000000000100020000000000", contexts[48..64], "SMB3 encryption context wire fixture");
+Hex("08000400000000000100010000000000", contexts[64..80], "SMB3 signing context wire fixture");
+Hex("02000600000000000200020001000000", Negotiation.Contexts(offerBoth: true)[48..64], "SMB3 cipher-list wire fixture");
+Hex("4E544C4D5353500001000000358208E2000000000000000000000000000000000A0000000000000F",
+    Ntlm.Negotiate(), "NTLM negotiate wire fixture");
 ProtocolChecks.Run(root);
 Hex("31D6CFE0D16AE931B73C59D7E0C089C0", Crypto.Md4([]), "RFC1320 MD4 empty");
 Hex("A448017AAF21D8525FC10AE87AA6729D", Crypto.Md4(Encoding.ASCII.GetBytes("abc")), "RFC1320 MD4 abc");
@@ -65,12 +74,12 @@ foreach (bool encrypt in new[] { false, true })
     try
     {
         await RoundTrip("127.0.0.1", server.LocalEndPoint.Port, "files", encrypt, "smbtest", "testpass", "WORKGROUP");
-        await Reject(async () => { await using var bad = await SmbClient.ConnectAsync("127.0.0.1", "files", new() { UserName = "smbtest", Password = "wrong", Port = server.LocalEndPoint.Port }); }, Status.LogonFailure, "incorrect password");
+        await Reject(async () => { await using var bad = await SmbClient.ConnectAsync("127.0.0.1", "files", new() { UserName = "smbtest", Password = "wrong", Port = server.LocalEndPoint.Port }); }, NtStatus.LogonFailure, "incorrect password");
         await using var client = await SmbClient.ConnectAsync("127.0.0.1", "files", new() { UserName = "smbtest", Password = "testpass", Port = server.LocalEndPoint.Port, Encrypt = encrypt });
-        await Reject(() => client.WriteAllBytesAsync("../outside", new byte[1]), Status.AccessDenied, "path traversal");
+        await Reject(() => client.WriteAllBytesAsync("../outside", new byte[1]), NtStatus.AccessDenied, "path traversal");
         await client.WriteAllBytesAsync("sharing.bin", new byte[] { 1, 2, 3 });
         await using (var held = await client.OpenAsync("sharing.bin", FileMode.Open, FileAccess.Read, FileShare.None))
-        { await Reject(async () => { await using var blocked = await client.OpenAsync("sharing.bin"); }, Status.SharingViolation, "share access conflict"); }
+        { await Reject(async () => { await using var blocked = await client.OpenAsync("sharing.bin"); }, NtStatus.SharingViolation, "share access conflict"); }
         await client.DeleteAsync("sharing.bin");
     }
     finally { stop.Cancel(); await run; }
@@ -84,11 +93,11 @@ using (var stop = new CancellationTokenSource())
     {
         await using var client = await SmbClient.ConnectAsync("127.0.0.1", "files", new() { UserName = "smbtest", Password = "testpass", Port = server.LocalEndPoint.Port });
         Equal(new byte[] { 1, 2, 3 }, await client.ReadAllBytesAsync("read-only.bin"), "read-only export read");
-        await Reject(() => client.WriteAllBytesAsync("forbidden.bin", new byte[1]), Status.AccessDenied, "read-only export denies mutation");
+        await Reject(() => client.WriteAllBytesAsync("forbidden.bin", new byte[1]), NtStatus.AccessDenied, "read-only export denies mutation");
         if (OperatingSystem.IsLinux())
         {
             string link = Path.Combine(root, "escape-link"); File.CreateSymbolicLink(link, "/etc/passwd");
-            try { await Reject(() => client.ReadAllBytesAsync("escape-link"), Status.AccessDenied, "symlink escape denied"); } finally { File.Delete(link); }
+            try { await Reject(() => client.ReadAllBytesAsync("escape-link"), NtStatus.AccessDenied, "symlink escape denied"); } finally { File.Delete(link); }
         }
     }
     finally { stop.Cancel(); await run; File.Delete(readable); }
@@ -118,7 +127,7 @@ using (var stop = new CancellationTokenSource())
             if (info.CreationTimeUtc != time || info.LastWriteTimeUtc != time || (info.Attributes & FileAttributes.Hidden) == 0) throw new Exception("Persistent metadata mismatch.");
             Console.WriteLine("PASS persistent creation/write time and hidden/archive attributes across close and rename");
         }
-        catch (SmbException e) when (OperatingSystem.IsLinux() && e.NtStatus == Status.NotSupported) { Console.WriteLine("SKIP exact logical timestamps: backing filesystem does not support user xattrs"); }
+        catch (SmbException e) when (OperatingSystem.IsLinux() && e.NtStatus == NtStatus.NotSupported) { Console.WriteLine("SKIP exact logical timestamps: backing filesystem does not support user xattrs"); }
         finally { await client.DeleteAsync(file); }
     }
     finally { stop.Cancel(); await run; }
