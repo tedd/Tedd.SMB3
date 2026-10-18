@@ -1,4 +1,4 @@
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 // MS-FSCC information buffers. Offsets start at the information buffer, not the SMB3 packet header.
 internal static class FileBasicInformation

@@ -3,7 +3,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 internal static class Crypto
 {

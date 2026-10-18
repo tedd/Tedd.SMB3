@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>Credentials, transport endpoint, and protection policy for one client session.</summary>
 public sealed record SmbClientOptions

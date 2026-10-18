@@ -4,7 +4,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>One export root, local account, and bounded connection policy.</summary>
 public sealed record SmbServerOptions

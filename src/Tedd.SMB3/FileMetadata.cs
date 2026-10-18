@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>Maps native identity, times and DOS attributes onto MS-FSCC metadata.</summary>
 /// <remarks>Linux xattrs persist SMB fields that POSIX metadata cannot represent.</remarks>

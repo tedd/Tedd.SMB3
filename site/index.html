@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7faf9">
   <meta name="description" content="Managed SMB 3.1.1 client and file server for .NET 10. Use C# APIs or mount encrypted shares from Windows and Linux.">
-  <meta property="og:title" content="Tedd.Smb — SMB 3.1.1 for .NET">
+  <meta property="og:title" content="Tedd.SMB3 — SMB 3.1.1 for .NET">
   <meta property="og:description" content="Connect in C#. Serve a directory. Mount from Windows or Linux.">
   <meta property="og:type" content="website">
-  <title>Tedd.Smb — SMB 3.1.1 for .NET</title>
+  <title>Tedd.SMB3 — SMB 3.1.1 for .NET</title>
   <link rel="canonical" href="https://tedd.no/Tedd.SMB3/">
   <link rel="icon" href="assets/smb-icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -17,7 +17,7 @@
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
-    <a class="brand" href="#top" aria-label="Tedd.Smb home"><img src="assets/smb-icon.svg" width="34" height="34" alt=""><span>TEDD<span class="brand-slash">/</span>SMB</span></a>
+    <a class="brand" href="#top" aria-label="Tedd.SMB3 home"><img src="assets/smb-icon.svg" width="34" height="34" alt=""><span>TEDD<span class="brand-slash">/</span>SMB3</span></a>
     <nav aria-label="Primary navigation"><a href="#examples">C# examples</a><a href="#mount">Mount a share</a><a href="#scope">Capabilities</a><a class="nav-cta" href="https://github.com/tedd/Tedd.SMB3">Source ↗</a></nav>
   </header>
   <main id="main">
@@ -28,7 +28,7 @@
         <h1>Your files.<br><em>Across the network.</em></h1>
         <p class="lede">A managed SMB 3.1.1 client and file server for C#. Connect to a share, export a directory, or access files through native Windows and Linux mounts.</p>
         <div class="hero-badges">
-          <a href="https://www.nuget.org/packages/Tedd.Smb"><img src="https://img.shields.io/nuget/v/Tedd.Smb?logo=nuget&amp;label=NuGet" alt="NuGet package version" height="20"></a>
+          <a href="https://www.nuget.org/packages/Tedd.SMB3"><img src="https://img.shields.io/nuget/v/Tedd.SMB3?logo=nuget&amp;label=NuGet" alt="NuGet package version" height="20"></a>
           <a href="https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml"><img src="https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml/badge.svg?branch=main" alt="Build and test status" height="20"></a>
         </div>
         <div class="hero-actions"><a class="button primary" href="#examples">Start with C# ↓</a><a class="button secondary" href="#mount">Mount a share ↓</a></div>
@@ -53,10 +53,10 @@
       <p><strong>Native mounts</strong><span>Windows SMB client and Linux CIFS</span></p>
     </section>
     <section class="section-shell examples-section" id="examples">
-      <div class="section-intro"><div><p class="eyebrow">C# examples</p><h2>Connect. Transfer.<br>Serve.</h2></div><p>Install the package in a .NET 10 project. These examples use the <code>Tedd.Smb</code> namespace and read the password from <code>TEDD_SMB_PASSWORD</code>.</p></div>
-      <div class="install-command"><code id="install">dotnet add package Tedd.Smb</code><button type="button" data-copy-target="install">Copy</button></div>
+      <div class="section-intro"><div><p class="eyebrow">C# examples</p><h2>Connect. Transfer.<br>Serve.</h2></div><p>Install the package in a .NET 10 project. These examples use the <code>Tedd.SMB3</code> namespace and read the password from <code>TEDD_SMB_PASSWORD</code>.</p></div>
+      <div class="install-command"><code id="install">dotnet add package Tedd.SMB3</code><button type="button" data-copy-target="install">Copy</button></div>
       <div class="example-grid">
-        <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Read and write a share</b><button type="button" data-copy-target="client">Copy</button></div><pre><code id="client">using Tedd.Smb;
+        <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Read and write a share</b><button type="button" data-copy-target="client">Copy</button></div><pre><code id="client">using Tedd.SMB3;
 
 string password = Environment.GetEnvironmentVariable(
     "TEDD_SMB_PASSWORD") ?? throw new InvalidOperationException(
@@ -79,7 +79,7 @@ foreach (var entry in await client.ListDirectoryAsync())
 await client.MoveAsync("hello.txt", "renamed.txt");
 await client.DeleteAsync("renamed.txt");</code></pre></div>
         <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Export an existing directory</b><button type="button" data-copy-target="server">Copy</button></div><pre><code id="server">using System.Net;
-using Tedd.Smb;
+using Tedd.SMB3;
 
 string password = Environment.GetEnvironmentVariable(
     "TEDD_SMB_PASSWORD") ?? throw new InvalidOperationException(
@@ -122,19 +122,19 @@ while ((count = await remote.ReadAsync(buffer, offset)) &gt; 0)
       <div class="section-intro"><div><p class="eyebrow">Console host</p><h2>A directory becomes<br>a network share.</h2></div><p>Clone the source and build the host with the .NET 10 SDK. Create the export directory first, set a password in the process environment, then start the foreground server.</p></div>
       <div class="example-grid">
         <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Windows · PowerShell</b><button type="button" data-copy-target="host-windows">Copy</button></div><pre><code id="host-windows"># From the cloned repository.
-dotnet build Tedd.Smb.slnx -c Release
+dotnet build Tedd.SMB3.slnx -c Release
 New-Item -ItemType Directory -Force D:\Exports\files
 $credential = Get-Credential -UserName smbuser
 $env:TEDD_SMB_PASSWORD = $credential.GetNetworkCredential().Password
-dotnet src/Tedd.Smb.Host/bin/Release/net10.0/Tedd.Smb.Host.dll serve `
+dotnet src/Tedd.SMB3.Host/bin/Release/net10.0/Tedd.SMB3.Host.dll serve `
   --root D:\Exports\files --share files --user smbuser `
   --bind 0.0.0.0 --port 1445 --writable</code></pre></div>
         <div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Linux · Bash</b><button type="button" data-copy-target="host-linux">Copy</button></div><pre><code id="host-linux"># From the cloned repository.
-dotnet build Tedd.Smb.slnx -c Release
+dotnet build Tedd.SMB3.slnx -c Release
 mkdir -p "$HOME/smb-export"
 read -rsp 'SMB password: ' TEDD_SMB_PASSWORD; echo
 export TEDD_SMB_PASSWORD
-dotnet src/Tedd.Smb.Host/bin/Release/net10.0/Tedd.Smb.Host.dll serve \
+dotnet src/Tedd.SMB3.Host/bin/Release/net10.0/Tedd.SMB3.Host.dll serve \
   --root "$HOME/smb-export" --share files --user smbuser \
   --bind 0.0.0.0 --port 1445 --writable</code></pre></div>
       </div>
@@ -179,7 +179,7 @@ sudo umount /mnt/tedd-smb</code></pre></div><p><code>seal</code> requests SMB en
       <div class="scope-note"><h3>Deployment considerations</h3><p>Authentication uses NTLMv2. Kerberos/domain integration, guest access, leases/oplocks, byte-range locks, durable handles, multichannel, change notifications, alternate streams, Windows ACL management, and compression are outside this implementation. Sessions and handles cannot be recovered after reconnect.</p><p>Linux logical creation/change timestamps and hidden/archive attributes use <code>user.tedd.smb3.*</code> extended attributes. The backing filesystem and backups must preserve them. Independent server instances need separate exports.</p></div>
     </section>
   </main>
-  <footer><a class="brand" href="#top">TEDD<span class="brand-slash">/</span>SMB</a><span>Managed SMB 3.1.1 for .NET 10</span><div><a href="https://github.com/tedd/Tedd.SMB3">GitHub ↗</a><a href="https://www.nuget.org/packages/Tedd.Smb">NuGet ↗</a></div></footer>
+  <footer><a class="brand" href="#top">TEDD<span class="brand-slash">/</span>SMB3</a><span>Managed SMB 3.1.1 for .NET 10</span><div><a href="https://github.com/tedd/Tedd.SMB3">GitHub ↗</a><a href="https://www.nuget.org/packages/Tedd.SMB3">NuGet ↗</a></div></footer>
   <p class="sr-only" id="copy-status" role="status" aria-live="polite"></p>
 </body>
 </html>

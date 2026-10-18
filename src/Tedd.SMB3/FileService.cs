@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.IO.Enumeration;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>Connection-owned file or pipe handle and its enumeration/delete state.</summary>
 internal sealed class OpenFile : IDisposable

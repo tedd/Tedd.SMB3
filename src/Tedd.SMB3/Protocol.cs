@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>Little-endian field access and checked SMB packet construction.</summary>
 internal static class Wire

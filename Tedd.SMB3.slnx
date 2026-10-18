@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/Tedd.SMB3/Tedd.SMB3.csproj" />
+  <Project Path="src/Tedd.SMB3.Host/Tedd.SMB3.Host.csproj" />
+  <Project Path="tests/Tedd.SMB3.Tests/Tedd.SMB3.Tests.csproj" />
+</Solution>

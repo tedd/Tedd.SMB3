@@ -1,4 +1,4 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
-  <ItemGroup><ProjectReference Include="../Tedd.Smb/Tedd.Smb.csproj" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../../src/Tedd.SMB3/Tedd.SMB3.csproj" /></ItemGroup>
 </Project>

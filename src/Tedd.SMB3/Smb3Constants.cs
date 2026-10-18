@@ -1,4 +1,4 @@
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 // SMB 3.1.1 wire values from MS-SMB2, which specifies both SMB2 and SMB3.
 // The Smb3 prefix identifies this implementation's supported dialect family.

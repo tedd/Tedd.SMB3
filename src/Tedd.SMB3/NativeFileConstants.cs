@@ -1,4 +1,4 @@
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 // Native API layouts are deliberately distinct from SMB/MS-FSCC information classes.
 // statx is read without following the final component; it is not an SMB wire structure.

@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
-using Tedd.Smb;
+using Tedd.SMB3;
 
 /// <summary>Boundary and ownership regressions for reusable crypto, framing, and async I/O.</summary>
 internal static class AllocationRefactorChecks

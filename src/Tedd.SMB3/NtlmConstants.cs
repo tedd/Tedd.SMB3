@@ -1,4 +1,4 @@
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 // MS-NLMP negotiate flags, AV_PAIR identifiers and message layouts.
 internal static class NtlmNegotiateFlags

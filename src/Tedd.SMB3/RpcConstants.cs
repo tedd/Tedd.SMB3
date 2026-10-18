@@ -1,4 +1,4 @@
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 // MS-RPCE connection-oriented PDUs and MS-SRVS operation numbers.
 internal static class RpcPacketType

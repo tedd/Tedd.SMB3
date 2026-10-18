@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Net.Sockets;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>Direct TCP framing with one reusable receive header per connection.</summary>
 /// <remarks>The owner serializes sends and receives and owns the network stream.</remarks>

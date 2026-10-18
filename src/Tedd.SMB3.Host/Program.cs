@@ -1,10 +1,10 @@
 using System.Net;
-using Tedd.Smb;
+using Tedd.SMB3;
 
 // Keep hosting policy separate from the library; the password is read from the process environment.
 if (args.Length == 0 || args[0] != "serve")
 {
-    Console.Error.WriteLine("Usage: Tedd.Smb.Host serve --root PATH [--share files] [--user smbtest] [--bind 127.0.0.1] [--port 445] [--writable] [--allow-unencrypted]\nSet TEDD_SMB_PASSWORD in the process environment.");
+    Console.Error.WriteLine("Usage: Tedd.SMB3.Host serve --root PATH [--share files] [--user smbtest] [--bind 127.0.0.1] [--port 445] [--writable] [--allow-unencrypted]\nSet TEDD_SMB_PASSWORD in the process environment.");
     return 2;
 }
 

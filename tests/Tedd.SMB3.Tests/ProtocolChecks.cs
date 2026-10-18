@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
-using Tedd.Smb;
+using Tedd.SMB3;
 
 /// <summary>Adversarial packet fixtures independent of the client serializer.</summary>
 internal static class ProtocolChecks

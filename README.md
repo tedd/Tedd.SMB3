@@ -1,6 +1,6 @@
-# Tedd.Smb
+# Tedd.SMB3
 
-[![NuGet](https://img.shields.io/nuget/v/Tedd.Smb.svg)](https://www.nuget.org/packages/Tedd.Smb)
+[![NuGet](https://img.shields.io/nuget/v/Tedd.SMB3.svg)](https://www.nuget.org/packages/Tedd.SMB3)
 [![Build](https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml/badge.svg?branch=main)](https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml)
 
 [Documentation and examples](https://tedd.no/Tedd.SMB3/) ·
@@ -61,7 +61,7 @@ environment. For local development on Windows:
 
 ```powershell
 $env:TEDD_SMB_PASSWORD = '<password>'
-dotnet D:\Workspaces\AI\tedd-smb3-build\artifacts\bin\Tedd.Smb.Host\release\Tedd.Smb.Host.dll serve `
+dotnet D:\Workspaces\AI\tedd-smb3-build\artifacts\bin\Tedd.SMB3.Host\release\Tedd.SMB3.Host.dll serve `
   --root D:\Exports\files --share files --user smbuser --bind 127.0.0.1 --port 1445 --writable
 ```
 
@@ -78,13 +78,13 @@ while retaining encryption support. Ctrl-C stops the foreground host.
 Install the package in a .NET 10 project:
 
 ```sh
-dotnet add package Tedd.Smb
+dotnet add package Tedd.SMB3
 ```
 
-Alternatively, reference `src/Tedd.Smb/Tedd.Smb.csproj`.
+Alternatively, reference `src/Tedd.SMB3/Tedd.SMB3.csproj`.
 
 ```csharp
-using Tedd.Smb;
+using Tedd.SMB3;
 
 string password = Environment.GetEnvironmentVariable("TEDD_SMB_PASSWORD")
     ?? throw new InvalidOperationException("Set TEDD_SMB_PASSWORD.");
@@ -120,7 +120,7 @@ and filesystem permissions appropriate for the intended clients.
 
 ```csharp
 using System.Net;
-using Tedd.Smb;
+using Tedd.SMB3;
 
 string password = Environment.GetEnvironmentVariable("TEDD_SMB_PASSWORD")
     ?? throw new InvalidOperationException("Set TEDD_SMB_PASSWORD.");
@@ -193,7 +193,7 @@ that branch is first created, or through an explicit workflow dispatch on
 `deploy`. Authentication uses [NuGet Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing)
 through GitHub Actions OIDC. Configure the NuGet.org policy for repository
 owner `tedd`, repository `Tedd.SMB3`, workflow file `nuget-publish.yml`, and
-environment `nuget`, with permission to publish `Tedd.Smb` (including its
+environment `nuget`, with permission to publish `Tedd.SMB3` (including its
 initial release). The NuGet account defaults to `tedd`; set the `NUGET_USER`
 repository or environment variable to use another account. The publishing job
 requests a temporary credential through `NuGet/login`; no API-key secret is
@@ -243,8 +243,8 @@ DrvFS ownership limitations. Stop the test server and unmount it before deleting
 the workspace. The C# client acceptance executable runs on either OS:
 
 ```sh
-TEDD_SMB_USER=root TEDD_SMB_PASSWORD=testpass dotnet Tedd.Smb.Tests.dll client HOST 1447 files false
-TEDD_SMB_USER=root TEDD_SMB_PASSWORD=testpass dotnet Tedd.Smb.Tests.dll client HOST 1447 files true
+TEDD_SMB_USER=root TEDD_SMB_PASSWORD=testpass dotnet Tedd.SMB3.Tests.dll client HOST 1447 files false
+TEDD_SMB_USER=root TEDD_SMB_PASSWORD=testpass dotnet Tedd.SMB3.Tests.dll client HOST 1447 files true
 ```
 
 Protocol references:

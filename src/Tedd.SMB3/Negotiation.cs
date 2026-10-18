@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>SMB 3.1.1 algorithm negotiation and preauthentication transcript hashing.</summary>
 internal static class Negotiation

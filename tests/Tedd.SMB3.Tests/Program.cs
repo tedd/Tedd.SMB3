@@ -1,7 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
-using Tedd.Smb;
+using Tedd.SMB3;
 
 // Performance mode executes no file, network, or account mutations.
 if (args is ["perf"]) { PerformanceChecks.Run(); return; }

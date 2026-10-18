@@ -40,12 +40,20 @@ jobs:
             if ($env:EVENT_NAME -eq 'workflow_dispatch' -or $env:PREVIOUS_REVISION -match '^0+$') {
               $changed = $true
             } elseif ($env:EVENT_NAME -eq 'push') {
-              $path = 'src/Tedd.Smb/Tedd.Smb.csproj'
+              $path = 'src/Tedd.SMB3/Tedd.SMB3.csproj'
               $current = [xml](Get-Content -LiteralPath $path -Raw)
-              $previousText = git show "${env:PREVIOUS_REVISION}:$path"
-              if ($LASTEXITCODE -ne 0) { throw 'Cannot verify the previous release version.' }
-              $previous = [xml](($previousText -join "`n").TrimStart([char]0xFEFF))
-              $changed = [string]$current.Project.PropertyGroup.Version -cne [string]$previous.Project.PropertyGroup.Version
+              $previousPath = git ls-tree --name-only $env:PREVIOUS_REVISION -- $path
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the previous release commit.' }
+              if (-not $previousPath) {
+                # A renamed project starts a release at its new path.
+                $changed = $true
+              } else {
+                $previousText = git show "${env:PREVIOUS_REVISION}:$path"
+                if ($LASTEXITCODE -ne 0) { throw 'Cannot verify the previous release version.' }
+                $previous = [xml](($previousText -join "`n").TrimStart([char]0xFEFF))
+                $changed = [string]$current.Project.PropertyGroup.Version -cne [string]$previous.Project.PropertyGroup.Version -or
+                  [string]$current.Project.PropertyGroup.PackageId -cne [string]$previous.Project.PropertyGroup.PackageId
+              }
             }
           }
           "changed=$($changed.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -55,18 +63,18 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          dotnet build Tedd.Smb.slnx --configuration Release --artifacts-path "$env:RUNNER_TEMP/smb-release/artifacts"
+          dotnet build Tedd.SMB3.slnx --configuration Release --artifacts-path "$env:RUNNER_TEMP/smb-release/artifacts"
           if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
       - name: Run protocol, security and file transfer checks
         shell: pwsh
         run: |
-          dotnet "$env:RUNNER_TEMP/smb-release/artifacts/bin/Tedd.Smb.Tests/release/Tedd.Smb.Tests.dll" "$env:RUNNER_TEMP/smb-release/fixtures"
+          dotnet "$env:RUNNER_TEMP/smb-release/artifacts/bin/Tedd.SMB3.Tests/release/Tedd.SMB3.Tests.dll" "$env:RUNNER_TEMP/smb-release/fixtures"
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
       - name: Pack
         if: runner.os == 'Linux'
         shell: pwsh
         run: |
-          dotnet pack src/Tedd.Smb/Tedd.Smb.csproj --configuration Release --no-build --no-restore --artifacts-path "$env:RUNNER_TEMP/smb-release/artifacts" --output "$env:RUNNER_TEMP/smb-release/packages"
+          dotnet pack src/Tedd.SMB3/Tedd.SMB3.csproj --configuration Release --no-build --no-restore --artifacts-path "$env:RUNNER_TEMP/smb-release/artifacts" --output "$env:RUNNER_TEMP/smb-release/packages"
           if ($LASTEXITCODE -ne 0) { throw 'Pack failed.' }
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
@@ -89,7 +97,7 @@ jobs:
         shell: pwsh
         run: |
           if ($env:GITHUB_REF -cne 'refs/heads/deploy') { throw 'Publication requires the deploy branch.' }
-          $project = [xml](Get-Content -LiteralPath 'src/Tedd.Smb/Tedd.Smb.csproj' -Raw)
+          $project = [xml](Get-Content -LiteralPath 'src/Tedd.SMB3/Tedd.SMB3.csproj' -Raw)
           if ([string]$project.Project.PropertyGroup.Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be MAJOR.MINOR.PATCH.' }
       - uses: actions/setup-dotnet@v4
         with:

@@ -1,4 +1,4 @@
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 // SMB 3.1.1 retains the SMB2 packet format defined by MS-SMB2.
 // Offsets are in bytes; header offsets start at the protocol identifier.

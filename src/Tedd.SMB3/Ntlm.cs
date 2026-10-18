@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>Minimal bounded ASN.1 wrappers for SPNEGO's NTLM mechanism.</summary>
 internal static class Spnego

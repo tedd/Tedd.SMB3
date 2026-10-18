@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using Tedd.Smb;
+using Tedd.SMB3;
 
 /// <summary>Repeatable kernel measurements; file and network throughput are tested separately.</summary>
 internal static class PerformanceChecks

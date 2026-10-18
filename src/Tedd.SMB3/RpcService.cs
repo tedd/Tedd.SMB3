@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 /// <summary>Bounded connection-oriented DCE/RPC endpoint for srvsvc share discovery.</summary>
 internal sealed class RpcService

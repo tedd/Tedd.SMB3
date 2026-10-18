@@ -1,4 +1,4 @@
-namespace Tedd.Smb;
+namespace Tedd.SMB3;
 
 // MS-ERREF NTSTATUS names, without the STATUS_ prefix.
 internal static class NtStatus

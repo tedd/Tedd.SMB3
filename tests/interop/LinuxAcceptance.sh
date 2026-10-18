@@ -5,7 +5,7 @@ workspace=$1
 repo=$2
 windows_host=$3
 python="$workspace/venv/bin/python"
-tests="$workspace/release/artifacts/bin/Tedd.Smb.Tests/release/Tedd.Smb.Tests.dll"
+tests="$workspace/release/artifacts/bin/Tedd.SMB3.Tests/release/Tedd.SMB3.Tests.dll"
 sh "$repo/tests/interop/LinuxMount.sh" 127.0.0.1 1445 "$workspace" "$repo" sign
 sh "$repo/tests/interop/LinuxMount.sh" 127.0.0.1 1446 "$workspace" "$repo" seal
 sh "$repo/tests/interop/LinuxMount.sh" "$windows_host" 1448 "$workspace" "$repo" sign
