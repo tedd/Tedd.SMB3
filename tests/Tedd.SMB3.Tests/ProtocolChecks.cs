@@ -27,6 +27,13 @@ internal static class ProtocolChecks
         await using (var s = await Session.CreateAsync(root))
         { var p = s.Request(13, [4, 0, 0, 0]); await Rejected(() => s.Connection.ProcessAsync(p), "unsigned authenticated command rejected"); }
         await using (var s = await Session.CreateAsync(root))
+        {
+            var p = s.Request(13, new byte[4096]); s.Crypto.Sign(p);
+            p = SmbCompression.Compress(p);
+            if (p[0] != 0xfc) throw new Exception("Compression fixture did not compress.");
+            await Rejected(() => s.Connection.ProcessAsync(p), "compression without negotiation rejected");
+        }
+        await using (var s = await Session.CreateAsync(root))
         { var p = s.Request(13, [4, 0, 0, 0]); Wire.WriteUInt32LittleEndian(p, 20, 65); await Rejected(() => s.Connection.ProcessAsync(p), "unaligned compound rejected"); }
         await using (var s = await Session.CreateAsync(root))
         {

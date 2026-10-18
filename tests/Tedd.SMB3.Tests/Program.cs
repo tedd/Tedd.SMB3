@@ -57,6 +57,9 @@ Hex("4E544C4D5353500001000000358208E2000000000000000000000000000000000A000000000
     Ntlm.Negotiate(), "NTLM negotiate wire fixture");
 await ProtocolChecks.RunAsync(root);
 await AllocationRefactorChecks.RunAsync(root);
+await ProviderChecks.RunAsync(root);
+CompressionChecks.Run();
+RpcShareChecks.Run();
 Hex("31D6CFE0D16AE931B73C59D7E0C089C0", Crypto.Md4([]), "RFC1320 MD4 empty");
 Hex("A448017AAF21D8525FC10AE87AA6729D", Crypto.Md4(Encoding.ASCII.GetBytes("abc")), "RFC1320 MD4 abc");
 Hex("A4F49C406510BDCAB6824EE7C30FD852", Crypto.Md4(Encoding.Unicode.GetBytes("Password")), "NT hash");

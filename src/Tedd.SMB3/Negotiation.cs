@@ -16,7 +16,7 @@ internal static class Negotiation
         return b;
     }
 
-    internal static byte[] Contexts(bool signing = true, int cipher = Smb3Cipher.Aes128Gcm, bool offerBoth = false)
+    internal static byte[] Contexts(bool signing = true, int cipher = Smb3Cipher.Aes128Gcm, bool offerBoth = false, bool compression = false)
     {
         int saltOffset = Smb3PreauthIntegrityCapabilities.HashAlgorithmsOffset + sizeof(ushort);
         var preauth = new byte[saltOffset + SmbLimits.PreauthSaltSize];
@@ -25,7 +25,7 @@ internal static class Negotiation
         Wire.WriteUInt16LittleEndian(preauth, Smb3PreauthIntegrityCapabilities.HashAlgorithmsOffset, Smb3PreauthHashAlgorithm.Sha512);
         RandomNumberGenerator.Fill(preauth.AsSpan(saltOffset));
         var encryption = Algorithms(offerBoth ? [Smb3Cipher.Aes128Gcm, Smb3Cipher.Aes128Ccm] : [checked((ushort)cipher)]);
-        return Wire.Join(Context(Smb3NegotiateContextType.PreauthIntegrityCapabilities, preauth), Context(Smb3NegotiateContextType.EncryptionCapabilities, encryption), signing ? Context(Smb3NegotiateContextType.SigningCapabilities, Algorithms([Smb3SigningAlgorithm.AesCmac])) : []);
+        return Wire.Join(Context(Smb3NegotiateContextType.PreauthIntegrityCapabilities, preauth), Context(Smb3NegotiateContextType.EncryptionCapabilities, encryption), signing ? Context(Smb3NegotiateContextType.SigningCapabilities, Algorithms([Smb3SigningAlgorithm.AesCmac])) : [], compression ? Context(Smb3NegotiateContextType.CompressionCapabilities, [1, 0, 0, 0, 0, 0, 0, 0, 1, 0]) : []);
     }
 
     private static byte[] Algorithms(ushort[] algorithms)
@@ -37,11 +37,11 @@ internal static class Negotiation
         return data;
     }
 
-    internal static (bool Signing, int Cipher) ValidateContexts(ReadOnlySpan<byte> packet, int offset, int count, bool response)
+    internal static (bool Signing, int Cipher, bool Compression) ValidateContexts(ReadOnlySpan<byte> packet, int offset, int count, bool response)
     {
         if (count is < 1 or > SmbLimits.MaxNegotiateContexts || offset < Smb3Header.Size + Smb3NegotiateRequest.FixedSize || (offset & 7) != 0)
             throw new SmbException(NtStatus.InvalidParameter);
-        bool hash = false, signing = false;
+        bool hash = false, signing = false, compression = false;
         int cipher = Smb3Cipher.None;
         var seen = new HashSet<ushort>();
         for (int i = 0; i < count; i++)
@@ -86,12 +86,22 @@ internal static class Negotiation
                     signing = true;
             }
 
+            if (type == Smb3NegotiateContextType.CompressionCapabilities)
+            {
+                if (data.Length < 8) throw new SmbException(NtStatus.InvalidParameter);
+                int number = Wire.ReadUInt16LittleEndian(data, 0);
+                uint flags = Wire.ReadUInt32LittleEndian(data, 4);
+                if (number < 1 || number > 32 || data.Length != 8 + number * 2 || (flags & ~1u) != 0 || (response && flags != 0))
+                    throw new SmbException(NtStatus.InvalidParameter);
+                for (int j = 0; j < number; j++)
+                    compression |= Wire.ReadUInt16LittleEndian(data, 8 + j * 2) == 1;
+            }
             offset = checked(offset + Wire.Align(Smb3NegotiateContext.HeaderSize + n));
         }
 
         if (!hash || cipher == Smb3Cipher.None)
             throw new SmbException(NtStatus.NotSupported);
-        return (signing, cipher);
+        return (signing, cipher, compression);
     }
 
     internal static byte[] Hash(ReadOnlySpan<byte> previous, ReadOnlySpan<byte> packet)

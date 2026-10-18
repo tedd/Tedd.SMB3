@@ -74,6 +74,7 @@ internal static class Smb3NegotiateContextType
 {
     internal const ushort PreauthIntegrityCapabilities = 0x0001;
     internal const ushort EncryptionCapabilities = 0x0002;
+    internal const ushort CompressionCapabilities = 0x0003;
     internal const ushort SigningCapabilities = 0x0008;
 }
 

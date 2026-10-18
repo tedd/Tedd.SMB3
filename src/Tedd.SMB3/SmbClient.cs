@@ -14,6 +14,7 @@ public sealed record SmbClientOptions
     public int Port { get; init; } = SmbLimits.DefaultPort;
     /// <summary>Requests encryption; a peer may additionally require it at session or share level.</summary>
     public bool Encrypt { get; init; } = true;
+    public bool EnableCompression { get; init; } = true;
     /// <summary>Bounds each exchange after it acquires the connection gate.</summary>
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
 }
@@ -32,6 +33,8 @@ public sealed class SmbClient : IAsyncDisposable
     // A complete request/reply owns the channel, message credits and crypto providers.
     private readonly SemaphoreSlim gate = new(1);
     private readonly SmbClientOptions options;
+    private bool compression;
+    public bool IsCompressionEnabled => compression;
     private SmbTransport transport = null!;
     private SessionCrypto? crypto;
     private ulong message;
@@ -80,14 +83,16 @@ public sealed class SmbClient : IAsyncDisposable
         Wire.WriteUInt32LittleEndian(body, Smb3NegotiateRequest.CapabilitiesOffset, Smb3GlobalCapabilities.Encryption);
         Guid.NewGuid().TryWriteBytes(body.AsSpan(Smb3NegotiateRequest.ClientGuidOffset, 16));
         Wire.WriteUInt32LittleEndian(body, Smb3NegotiateRequest.NegotiateContextOffsetFieldOffset, (uint)(Smb3Header.Size + body.Length));
-        Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.NegotiateContextCountOffset, Negotiation.ContextCountWithSigning);
+        Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.NegotiateContextCountOffset, Negotiation.ContextCountWithSigning + (options.EnableCompression ? 1 : 0));
         Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.DialectsOffset, Smb3Dialect.Smb311);
-        var negotiate = CreateRequest(Smb3Command.Negotiate, Wire.Join(body, Negotiation.Contexts(offerBoth: true)));
+        var negotiate = CreateRequest(Smb3Command.Negotiate, Wire.Join(body, Negotiation.Contexts(offerBoth: true, compression: options.EnableCompression)));
         var response = await ExchangeUnauthenticatedAsync(negotiate, ct).ConfigureAwait(false);
         ThrowIfFailed(response);
         if (response.Length < Smb3Header.Size + Smb3NegotiateResponse.FixedSize || Wire.ReadUInt16LittleEndian(response, Smb3Header.Size) != Smb3NegotiateResponse.StructureSize || Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.DialectRevisionOffset) != Smb3Dialect.Smb311 || (Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.SecurityModeOffset) & Smb3SecurityMode.SigningEnabled) == 0)
             throw new SmbException(NtStatus.NotSupported);
         var algorithms = Negotiation.ValidateContexts(response, checked((int)Wire.ReadUInt32LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.NegotiateContextOffsetFieldOffset)), Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.NegotiateContextCountOffset), true);
+        if (algorithms.Compression && !options.EnableCompression) throw new SmbException(NtStatus.InvalidParameter);
+        compression = algorithms.Compression;
         byte[] hash = Negotiation.Hash(Negotiation.Hash(new byte[Smb3Cryptography.PreauthHashSize], negotiate), response);
         var ntlm = Ntlm.Negotiate();
         var setup = CreateRequest(Smb3Command.SessionSetup, CreateSessionSetupBody(ntlm));
@@ -180,15 +185,20 @@ public sealed class SmbClient : IAsyncDisposable
             var p = CreateRequest(cmd, body);
             if (!encrypted)
                 crypto!.Sign(p);
-            await transport.SendAsync(encrypted ? crypto!.Encrypt(p, session) : p, timeout.Token).ConfigureAwait(false);
+            byte[] outgoing = compression ? SmbCompression.Compress(p) : p;
+            await transport.SendAsync(encrypted ? crypto!.Encrypt(outgoing, session) : outgoing, timeout.Token).ConfigureAwait(false);
             var r = await transport.ReceiveAsync(timeout.Token).ConfigureAwait(false);
             bool wasEncrypted = r[Smb3Header.ProtocolIdOffset] == Smb3TransformHeader.ProtocolPrefix;
             if (wasEncrypted)
                 r = crypto!.Decrypt(r, session);
             else if (encrypted)
                 throw new SmbException(NtStatus.AccessDenied);
-            else
-                crypto!.Verify(r);
+            if (r[0] == SmbCompression.Prefix)
+            {
+                if (!compression) throw new SmbException(NtStatus.InvalidParameter);
+                r = SmbCompression.Decompress(r);
+            }
+            if (!wasEncrypted) crypto!.Verify(r);
             Wire.Validate(r);
             if (Wire.ReadUInt64LittleEndian(r, Smb3Header.MessageIdOffset) != Wire.ReadUInt64LittleEndian(p, Smb3Header.MessageIdOffset) || Wire.ReadUInt16LittleEndian(r, Smb3Header.CommandOffset) != cmd || Wire.ReadUInt64LittleEndian(r, Smb3Header.SessionIdOffset) != session || Wire.ReadUInt32LittleEndian(r, Smb3Header.NextCommandOffset) != 0 || (Wire.ReadUInt32LittleEndian(r, Smb3Header.FlagsOffset) & Smb3HeaderFlags.ResponseOrAsync) != Smb3HeaderFlags.ServerToRedir)
                 throw new SmbException(NtStatus.InvalidParameter);

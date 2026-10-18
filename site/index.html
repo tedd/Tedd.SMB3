@@ -26,7 +26,7 @@
       <div class="hero-copy">
         <p class="eyebrow"><span></span> File sharing for .NET</p>
         <h1>Your files.<br><em>Across the network.</em></h1>
-        <p class="lede">A managed SMB 3.1.1 client and file server for C#. Connect to a share, export a directory, or access files through native Windows and Linux mounts.</p>
+        <p class="lede">A managed SMB 3.1.1 client and file server for C#. Connect to a share, expose application data or directories, or access files through native Windows and Linux mounts.</p>
         <div class="hero-badges">
           <a href="https://www.nuget.org/packages/Tedd.SMB3"><img src="https://img.shields.io/nuget/v/Tedd.SMB3?logo=nuget&amp;label=NuGet" alt="NuGet package version" height="20"></a>
           <a href="https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml"><img src="https://github.com/tedd/Tedd.SMB3/actions/workflows/nuget-publish.yml/badge.svg?branch=main" alt="Build and test status" height="20"></a>
@@ -37,7 +37,7 @@
       <figure class="index-figure">
         <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><b>One share · three ways to connect</b><i>3.1.1</i></div>
         <div class="diagram-panel">
-          <div class="diagram-heading"><span>SMB CLIENTS</span><strong>NTLMv2 authentication</strong></div>
+          <div class="diagram-heading"><span>SMB CLIENTS</span><strong>NTLMv2 / Kerberos authentication</strong></div>
           <div class="endpoints"><div><b>C#</b><code>SmbClient</code></div><div><b>Windows</b><code>\\server\files</code></div><div><b>Linux</b><code>mount.cifs</code></div></div>
           <div class="connection"><span>↓</span><p>SMB 3.1.1 · encrypted transport</p><span>↓</span></div>
           <div class="server-box"><span>MANAGED C# SERVER</span><strong>SmbServer</strong><code>files → your export directory</code></div>
@@ -87,13 +87,11 @@ string password = Environment.GetEnvironmentVariable(
 
 await using var server = new SmbServer(new()
 {
-    RootPath = args[0], // Existing directory, e.g. /srv/smb/files.
-    ShareName = "files",
+    Shares = [new("files", SmbDirectoryProvider.Create(args[0])) { Writable = true }],
     UserName = "smbuser",
     Password = password,
     ListenAddress = IPAddress.Any,
     Port = 1445,
-    Writable = true,
     RequireEncryption = true
 });
 
@@ -170,13 +168,13 @@ sudo umount /mnt/tedd-smb</code></pre></div><p><code>seal</code> requests SMB en
       <p class="model-note">References: <a href="https://learn.microsoft.com/en-us/powershell/module/smbshare/new-smbmapping?view=windowsserver2025-ps">Microsoft New-SmbMapping</a> · <a href="https://www.man7.org/linux/man-pages/man8/mount.cifs.8.html">mount.cifs manual</a>.</p>
     </section>
     <section class="section-shell scope-section" id="scope">
-      <div class="section-intro"><div><p class="eyebrow">Capabilities &amp; operating limits</p><h2>Focused on<br>file transfer.</h2></div><p>One configured account, one disk share, and IPC$/srvsvc share enumeration. Use it for managed file sharing where these protocol capabilities fit your workload.</p></div>
+      <div class="section-intro"><div><p class="eyebrow">Capabilities &amp; operating limits</p><h2>Focused on<br>file transfer.</h2></div><p>Per-share storage providers, NTLMv2 or native Kerberos authentication, and IPC$/srvsvc share enumeration. Use it for managed file sharing where these protocol capabilities fit your workload.</p></div>
       <div class="capability-grid">
         <article><span class="step">01 / Files</span><h3>Read, write, manage</h3><p>Create and list directories. Read, write, flush, truncate, rename, and delete files. Use explicit 64-bit offsets and query or update timestamps and attributes.</p></article>
         <article><span class="step">02 / Sessions</span><h3>Bounded connections</h3><p>64 KiB transfers, 32 credits, 32 compound commands, 64 trees and 1,024 handles per connection; 32 connections by default. Requests on each connection execute in order.</p></article>
         <article><span class="step">03 / Security</span><h3>Trusted export directory</h3><p>Traversal and symbolic links are rejected. Protect the export from untrusted local directory replacement and run with filesystem permissions limited to the intended export.</p></article>
       </div>
-      <div class="scope-note"><h3>Deployment considerations</h3><p>Authentication uses NTLMv2. Kerberos/domain integration, guest access, leases/oplocks, byte-range locks, durable handles, multichannel, change notifications, alternate streams, Windows ACL management, and compression are outside this implementation. Sessions and handles cannot be recovered after reconnect.</p><p>Linux logical creation/change timestamps and hidden/archive attributes use <code>user.tedd.smb3.*</code> extended attributes. The backing filesystem and backups must preserve them. Independent server instances need separate exports.</p></div>
+      <div class="scope-note"><h3>Deployment considerations</h3><p>Shares register application storage providers or the included Windows and Linux directory providers. Authentication supports NTLMv2 or native Kerberos; external authentication requires an explicit share authorizer. Unchained LZNT1 compression is negotiated per connection. Guest access, leases/oplocks, byte-range locks, durable handles, multichannel, change notifications, alternate streams, and Windows ACL management are outside this implementation. Sessions and handles cannot be recovered after reconnect.</p><p>The Linux directory provider’s logical creation/change timestamps and hidden/archive attributes use <code>user.tedd.smb3.*</code> extended attributes. The backing filesystem and backups must preserve them. Independent server instances need separate exports.</p></div>
     </section>
   </main>
   <footer><a class="brand" href="#top">TEDD<span class="brand-slash">/</span>SMB3</a><span>Managed SMB 3.1.1 for .NET 10</span><div><a href="https://github.com/tedd/Tedd.SMB3">GitHub ↗</a><a href="https://www.nuget.org/packages/Tedd.SMB3">NuGet ↗</a></div></footer>

@@ -6,25 +6,32 @@ using System.Text;
 
 namespace Tedd.SMB3;
 
-/// <summary>One export root, local account, and bounded connection policy.</summary>
+/// <summary>Share providers, authentication, and bounded connection policy.</summary>
 public sealed record SmbServerOptions
 {
-    public required string RootPath { get; init; }
+    public string? RootPath { get; init; }
     public string ShareName { get; init; } = "files";
-    public required string UserName { get; init; }
-    public required string Password { get; init; }
+    public IReadOnlyList<SmbShare> Shares { get; init; } = [];
+    public string UserName { get; init; } = "";
+    public string Password { get; init; } = "";
+    public ISmbAuthenticationProvider? AuthenticationProvider { get; init; }
     public IPAddress ListenAddress { get; init; } = IPAddress.Loopback;
     public int Port { get; init; } = SmbLimits.DefaultPort;
     public bool Writable { get; init; }
     public bool RequireEncryption { get; init; } = true;
+    public bool EnableCompression { get; init; } = true;
     public int MaxConnections { get; init; } = SmbLimits.DefaultMaxConnections;
     public Action<string>? Log { get; init; }
 }
 
-/// <summary>A bounded SMB 3.1.1 file server with a single configured local account and disk share.</summary>
+/// <summary>A bounded SMB 3.1.1 server with provider-backed storage and authentication.</summary>
 public sealed class SmbServer : IAsyncDisposable
 {
     internal readonly SmbServerOptions Options;
+    internal readonly ISmbAuthenticationProvider Authentication;
+    internal readonly byte[] AuthenticationToken;
+    internal readonly IReadOnlyDictionary<string, SmbShare> Shares;
+    internal readonly string[] ShareNames;
     // One async gate preserves share-access, rename and delete-on-close atomicity.
     internal readonly SemaphoreSlim FileGate = new(1, 1);
     internal readonly List<OpenFile> OpenFiles = [];
@@ -38,18 +45,35 @@ public sealed class SmbServer : IAsyncDisposable
 
     public SmbServer(SmbServerOptions options)
     {
-        if (!Directory.Exists(options.RootPath))
-            throw new DirectoryNotFoundException(options.RootPath);
-        if (string.IsNullOrWhiteSpace(options.UserName) || string.IsNullOrEmpty(options.Password) || string.IsNullOrWhiteSpace(options.ShareName) || options.ShareName.IndexOfAny(['\\', '/', ':']) >= 0 || options.ShareName.Equals("IPC$", StringComparison.OrdinalIgnoreCase))
+        if (options.AuthenticationProvider == null && (string.IsNullOrWhiteSpace(options.UserName) || string.IsNullOrEmpty(options.Password)))
             throw new ArgumentException("Invalid account or share configuration.");
         if (options.MaxConnections is < 1 or > SmbLimits.MaxConnections)
             throw new ArgumentOutOfRangeException(nameof(options));
-        Options = options with
+        if (options.RootPath != null && options.Shares.Count != 0)
+            throw new ArgumentException("Configure RootPath or Shares, not both.", nameof(options));
+        var shares = options.RootPath != null
+            ? [new SmbShare(options.ShareName, SmbDirectoryProvider.Create(options.RootPath)) { Writable = options.Writable }]
+            : options.Shares.ToArray();
+        if (shares.Length is < 1 or > 256)
+            throw new ArgumentException("Configure between one and 256 shares.", nameof(options));
+        var registry = new Dictionary<string, SmbShare>(StringComparer.OrdinalIgnoreCase);
+        foreach (var share in shares)
         {
-            RootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.RootPath))
-        };
-        if ((File.GetAttributes(Options.RootPath) & FileAttributes.ReparsePoint) != 0)
-            throw new ArgumentException("Export root cannot be a link.");
+            if (share == null || share.Provider == null || string.IsNullOrWhiteSpace(share.Name) || share.Name.Length > 80 ||
+                share.Name.Any(c => c < 32 || "\\/:*?\"<>|".Contains(c)) || share.Name is "." or ".." ||
+                share.Name.EndsWith(' ') || share.Name.EndsWith('.') || share.Name.Equals("IPC$", StringComparison.OrdinalIgnoreCase) ||
+                !registry.TryAdd(share.Name, share))
+                throw new ArgumentException("Invalid or duplicate share configuration.", nameof(options));
+        }
+        if (options.AuthenticationProvider != null && shares.Any(x => x.Authorize == null))
+            throw new ArgumentException("External authentication requires an explicit authorizer for every share.", nameof(options));
+        Authentication = options.AuthenticationProvider ?? new NtlmAuthentication(options.UserName, options.Password);
+        AuthenticationToken = Authentication.NegotiateToken.ToArray();
+        if (AuthenticationToken.Length > SmbLimits.MaxAuthenticationTokenSize)
+            throw new ArgumentException("Authentication token exceeds the protocol limit.", nameof(options));
+        Shares = registry;
+        ShareNames = registry.Keys.ToArray();
+        Options = options with { Shares = shares };
         listener = new TcpListener(options.ListenAddress, options.Port);
     }
 
@@ -61,7 +85,7 @@ public sealed class SmbServer : IAsyncDisposable
         started = true;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, cancellationToken);
         listener.Start();
-        Options.Log?.Invoke($"Listening on {LocalEndPoint}; share {Options.ShareName}; SMB 3.1.1; encryption required={Options.RequireEncryption}.");
+        Options.Log?.Invoke($"Listening on {LocalEndPoint}; shares {string.Join(", ", ShareNames)}; SMB 3.1.1; encryption required={Options.RequireEncryption}.");
         try
         {
             while (!linked.IsCancellationRequested)
@@ -135,9 +159,11 @@ public sealed class SmbServer : IAsyncDisposable
 internal sealed class ServerConnection : IAsyncDisposable
 {
     private readonly SmbServer server;
-    private readonly NtlmServer auth;
+    private ISmbAuthenticationContext? auth;
+    private string principal = "";
+    private int authenticationSteps;
     private readonly FileService files;
-    private readonly Dictionary<uint, bool> trees = [];
+    private readonly Dictionary<uint, SmbShare?> trees = [];
     private readonly HashSet<ulong> credits = [0];
     private ulong nextCredit = 1;
     private uint nextTree;
@@ -146,27 +172,32 @@ internal sealed class ServerConnection : IAsyncDisposable
     private byte[] preauth = new byte[Smb3Cryptography.PreauthHashSize];
     private bool negotiated;
     private bool challenged;
-    private bool rawNtlm;
     private int cipher;
+    private bool compression;
     internal bool Authenticated => crypto != null;
     internal bool LoggedOff { get; private set; }
 
     internal ServerConnection(SmbServer server)
     {
         this.server = server;
-        auth = new(server.Options.UserName, server.Options.Password);
         files = new(server);
     }
 
     internal async ValueTask<byte[]> ProcessAsync(byte[] packet, CancellationToken cancellationToken = default)
     {
-        if (packet.Length < Smb3TransformHeader.Size)
+        if (packet.Length < 16)
             throw new SmbException(NtStatus.InvalidParameter);
         if (packet[Smb3Header.ProtocolIdOffset] == Smb1NegotiateEnvelope.ProtocolPrefix)
             return LegacyNegotiate(packet);
         bool encrypted = packet[Smb3Header.ProtocolIdOffset] == Smb3TransformHeader.ProtocolPrefix;
         if (encrypted)
             packet = (crypto ?? throw new SmbException(NtStatus.AccessDenied)).Decrypt(packet, session);
+        bool authenticatedBefore = Authenticated;
+        if (packet[0] == SmbCompression.Prefix)
+        {
+            if (!compression || !Authenticated) throw new SmbException(NtStatus.InvalidParameter);
+            packet = SmbCompression.Decompress(packet);
+        }
         Wire.Validate(packet);
         if (Wire.ReadUInt16LittleEndian(packet, Smb3Header.CommandOffset) == Smb3Command.Cancel)
         {
@@ -260,7 +291,7 @@ internal sealed class ServerConnection : IAsyncDisposable
                     }
                     else
                     {
-                        if (!trees.TryGetValue(tree, out bool pipe))
+                        if (!trees.TryGetValue(tree, out var share))
                             throw new SmbException(NtStatus.NetworkNameDeleted);
                         if (cmd == Smb3Command.TreeDisconnect)
                         {
@@ -269,7 +300,7 @@ internal sealed class ServerConnection : IAsyncDisposable
                             body = Wire.CreateSimpleMessage();
                         }
                         else
-                            body = await files.DispatchAsync(cmd, request, tree, pipe, cancellationToken).ConfigureAwait(false);
+                            body = await files.DispatchAsync(cmd, request, tree, share, cancellationToken).ConfigureAwait(false);
                     }
                 }
             }
@@ -311,6 +342,7 @@ internal sealed class ServerConnection : IAsyncDisposable
         }
 
         var result = replies.Count == 1 ? replies[0] : Wire.Join(replies.ToArray());
+        if (compression && authenticatedBefore) result = SmbCompression.Compress(result);
         return encrypted ? crypto!.Encrypt(result, session) : result;
     }
 
@@ -319,7 +351,7 @@ internal sealed class ServerConnection : IAsyncDisposable
         // SMB1 is accepted only as the compatibility envelope for SMB2 negotiation.
         if (negotiated || challenged || request.Length < Smb1NegotiateEnvelope.FixedSize || request[Smb1NegotiateEnvelope.CommandOffset] != Smb1NegotiateEnvelope.NegotiateCommand || Wire.ReadUInt32LittleEndian(request, 0) != Smb1NegotiateEnvelope.ProtocolId || request[Smb1NegotiateEnvelope.WordCountOffset] != 0 || Wire.ReadUInt16LittleEndian(request, Smb1NegotiateEnvelope.ByteCountOffset) != request.Length - Smb1NegotiateEnvelope.FixedSize || request.AsSpan(Smb1NegotiateEnvelope.FixedSize).IndexOf("SMB 2.???\0"u8) < 0)
             throw new SmbException(NtStatus.NotSupported);
-        var b = Wire.Join(Wire.Header(Smb3Command.Negotiate, 0), new byte[Smb3NegotiateResponse.FixedSize], Spnego.Initial);
+        var b = Wire.Join(Wire.Header(Smb3Command.Negotiate, 0), new byte[Smb3NegotiateResponse.FixedSize], server.AuthenticationToken);
         Wire.WriteUInt32LittleEndian(b, Smb3Header.FlagsOffset, Smb3HeaderFlags.ServerToRedir);
         Wire.WriteUInt16LittleEndian(b, Smb3Header.CreditsOffset, 1);
         Wire.WriteUInt16LittleEndian(b, Smb3Header.Size, Smb3NegotiateResponse.StructureSize);
@@ -331,7 +363,7 @@ internal sealed class ServerConnection : IAsyncDisposable
         Wire.WriteUInt32LittleEndian(b, Smb3Header.Size + Smb3NegotiateResponse.MaxWriteSizeOffset, SmbLimits.MaxTransferSize);
         Wire.WriteUInt64LittleEndian(b, Smb3Header.Size + Smb3NegotiateResponse.SystemTimeOffset, (ulong)DateTime.UtcNow.ToFileTimeUtc());
         Wire.WriteUInt16LittleEndian(b, Smb3Header.Size + Smb3NegotiateResponse.SecurityBufferOffsetFieldOffset, Smb3Header.Size + Smb3NegotiateResponse.FixedSize);
-        Wire.WriteUInt16LittleEndian(b, Smb3Header.Size + Smb3NegotiateResponse.SecurityBufferLengthOffset, Spnego.Initial.Length);
+        Wire.WriteUInt16LittleEndian(b, Smb3Header.Size + Smb3NegotiateResponse.SecurityBufferLengthOffset, server.AuthenticationToken.Length);
         credits.Clear();
         credits.Add(1);
         nextCredit = 2;
@@ -356,12 +388,13 @@ internal sealed class ServerConnection : IAsyncDisposable
         var algorithms = Negotiation.ValidateContexts(request, offset, Wire.ReadUInt16LittleEndian(request, Smb3Header.Size + Smb3NegotiateRequest.NegotiateContextCountOffset), false);
         bool signing = algorithms.Signing;
         cipher = algorithms.Cipher;
-        int ctxOffset = Wire.Align(Smb3Header.Size + Smb3NegotiateResponse.FixedSize + Spnego.Initial.Length);
+        compression = server.Options.EnableCompression && algorithms.Compression;
+        int ctxOffset = Wire.Align(Smb3Header.Size + Smb3NegotiateResponse.FixedSize + server.AuthenticationToken.Length);
         var b = new byte[ctxOffset - Smb3Header.Size];
         Wire.WriteUInt16LittleEndian(b, 0, Smb3NegotiateResponse.StructureSize);
         Wire.WriteUInt16LittleEndian(b, Smb3NegotiateResponse.SecurityModeOffset, Smb3SecurityMode.SigningEnabledAndRequired);
         Wire.WriteUInt16LittleEndian(b, Smb3NegotiateResponse.DialectRevisionOffset, Smb3Dialect.Smb311);
-        Wire.WriteUInt16LittleEndian(b, Smb3NegotiateResponse.NegotiateContextCountOffset, signing ? Negotiation.ContextCountWithSigning : Negotiation.BaseContextCount);
+        Wire.WriteUInt16LittleEndian(b, Smb3NegotiateResponse.NegotiateContextCountOffset, (signing ? Negotiation.ContextCountWithSigning : Negotiation.BaseContextCount) + (compression ? 1 : 0));
         server.GuidBytes.CopyTo(b, Smb3NegotiateResponse.ServerGuidOffset);
         Wire.WriteUInt32LittleEndian(b, Smb3NegotiateResponse.CapabilitiesOffset, Smb3GlobalCapabilities.Encryption);
         Wire.WriteUInt32LittleEndian(b, Smb3NegotiateResponse.MaxTransactSizeOffset, SmbLimits.MaxTransferSize);
@@ -369,11 +402,11 @@ internal sealed class ServerConnection : IAsyncDisposable
         Wire.WriteUInt32LittleEndian(b, Smb3NegotiateResponse.MaxWriteSizeOffset, SmbLimits.MaxTransferSize);
         Wire.WriteUInt64LittleEndian(b, Smb3NegotiateResponse.SystemTimeOffset, (ulong)DateTime.UtcNow.ToFileTimeUtc());
         Wire.WriteUInt16LittleEndian(b, Smb3NegotiateResponse.SecurityBufferOffsetFieldOffset, Smb3Header.Size + Smb3NegotiateResponse.FixedSize);
-        Wire.WriteUInt16LittleEndian(b, Smb3NegotiateResponse.SecurityBufferLengthOffset, Spnego.Initial.Length);
+        Wire.WriteUInt16LittleEndian(b, Smb3NegotiateResponse.SecurityBufferLengthOffset, server.AuthenticationToken.Length);
         Wire.WriteUInt32LittleEndian(b, Smb3NegotiateResponse.NegotiateContextOffsetFieldOffset, (uint)ctxOffset);
-        Spnego.Initial.CopyTo(b, Smb3NegotiateResponse.FixedSize);
+        server.AuthenticationToken.CopyTo(b, Smb3NegotiateResponse.FixedSize);
         negotiated = true;
-        return Wire.Join(b, Negotiation.Contexts(signing, cipher));
+        return Wire.Join(b, Negotiation.Contexts(signing, cipher, compression: compression));
     }
 
     private byte[] Setup(ReadOnlySpan<byte> request, out uint status)
@@ -383,33 +416,24 @@ internal sealed class ServerConnection : IAsyncDisposable
         int o = Wire.ReadUInt16LittleEndian(request, Smb3Header.Size + Smb3SessionSetupRequest.SecurityBufferOffsetFieldOffset), n = Wire.ReadUInt16LittleEndian(request, Smb3Header.Size + Smb3SessionSetupRequest.SecurityBufferLengthOffset);
         if (o < Smb3Header.Size + Smb3SessionSetupRequest.FixedSize || n > SmbLimits.MaxAuthenticationTokenSize)
             throw new SmbException(NtStatus.InvalidParameter);
-        var input = Wire.Slice(request, o, n).ToArray();
-        if (!challenged)
-            rawNtlm = input.AsSpan().StartsWith("NTLMSSP\0"u8);
-        var token = Spnego.Unwrap(input);
-        byte[] output;
-        if (!challenged)
+        if (++authenticationSteps > 8) throw new SmbException(NtStatus.LogonFailure);
+        auth ??= server.Authentication.CreateContext();
+        var step = auth.Accept(Wire.Slice(request, o, n));
+        challenged = true;
+        byte[] output = step.OutputToken;
+        if (output.Length > SmbLimits.MaxAuthenticationTokenSize) throw new SmbException(NtStatus.LogonFailure);
+        if (step.SessionKey is { } key)
         {
-            var challenge = auth.Challenge(token);
-            output = rawNtlm ? challenge : Spnego.Response(challenge, true);
-            challenged = true;
-            status = NtStatus.MoreProcessingRequired;
-        }
-        else
-        {
-            var key = auth.Authenticate(token);
             try
             {
+                if (key.Length != 16 || string.IsNullOrWhiteSpace(step.Principal)) throw new SmbException(NtStatus.LogonFailure);
                 crypto = new SessionCrypto(key, preauth, true, cipher);
+                principal = step.Principal;
             }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(key);
-            }
-
-            output = rawNtlm ? [] : Spnego.Response([], false);
+            finally { CryptographicOperations.ZeroMemory(key); }
             status = NtStatus.Success;
         }
+        else status = NtStatus.MoreProcessingRequired;
 
         var b = new byte[Smb3SessionSetupResponse.FixedSize];
         Wire.WriteUInt16LittleEndian(b, 0, Smb3SessionSetupResponse.StructureSize);
@@ -427,17 +451,20 @@ internal sealed class ServerConnection : IAsyncDisposable
         if (path.Length != 4 || path[0] != "" || path[1] != "" || path[2].Length == 0)
             throw new SmbException(NtStatus.BadNetworkName);
         bool pipe = path[3].Equals("IPC$", StringComparison.OrdinalIgnoreCase);
-        if (!pipe && !path[3].Equals(server.Options.ShareName, StringComparison.OrdinalIgnoreCase))
+        SmbShare? share = null;
+        if (!pipe && !server.Shares.TryGetValue(path[3], out share))
             throw new SmbException(NtStatus.BadNetworkName);
+        if (share?.Authorize != null && !share.Authorize(principal))
+            throw new SmbException(NtStatus.AccessDenied);
         if (trees.Count >= SmbLimits.MaxTrees)
             throw new SmbException(NtStatus.BufferTooSmall);
         id = ++nextTree;
-        trees.Add(id, pipe);
+        trees.Add(id, share);
         var b = new byte[Smb3TreeConnectResponse.FixedSize];
         Wire.WriteUInt16LittleEndian(b, 0, Smb3TreeConnectResponse.StructureSize);
         b[Smb3TreeConnectResponse.ShareTypeOffset] = pipe ? Smb3ShareType.Pipe : Smb3ShareType.Disk;
         Wire.WriteUInt32LittleEndian(b, Smb3TreeConnectResponse.ShareFlagsOffset, Smb3ShareFlags.NoCaching | (server.Options.RequireEncryption ? Smb3ShareFlags.EncryptData : 0));
-        Wire.WriteUInt32LittleEndian(b, Smb3TreeConnectResponse.MaximalAccessOffset, server.Options.Writable ? FileAccessMask.FileAllAccess : SmbLimits.ReadAccess);
+        Wire.WriteUInt32LittleEndian(b, Smb3TreeConnectResponse.MaximalAccessOffset, pipe || share?.Writable == true ? FileAccessMask.FileAllAccess : SmbLimits.ReadAccess);
         return b;
     }
 
@@ -460,6 +487,7 @@ internal sealed class ServerConnection : IAsyncDisposable
         finally
         {
             crypto?.Dispose();
+            auth?.Dispose();
         }
     }
 }

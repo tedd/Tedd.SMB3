@@ -127,7 +127,6 @@ internal static class RpcLimits
     internal const int MaxContexts = 8;
     internal const int MaxTransferSyntaxes = 8;
     internal const int MaxStringCharacters = 1024;
-    internal const int ShareCount = 2;
 }
 
 // Nonzero NDR32 referent identifiers are chosen by this implementation, not fixed by MS-SRVS.

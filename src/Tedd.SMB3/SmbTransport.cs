@@ -12,7 +12,7 @@ internal sealed class SmbTransport(NetworkStream stream)
     {
         await stream.ReadExactlyAsync(receiveHeader, cancellationToken).ConfigureAwait(false);
         int length = (receiveHeader[1] << 16) | (receiveHeader[2] << 8) | receiveHeader[3];
-        if (receiveHeader[0] != DirectTcpTransport.SessionMessage || length < Smb3TransformHeader.Size || length > SmbLimits.MaxFrameSize)
+        if (receiveHeader[0] != DirectTcpTransport.SessionMessage || length < 16 || length > SmbLimits.MaxFrameSize)
             throw new SmbException(NtStatus.InvalidParameter);
         // The returned array has independent ownership and may outlive this exchange.
         var packet = new byte[length];

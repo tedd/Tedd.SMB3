@@ -11,7 +11,10 @@ internal sealed class RpcService
     private byte[] fragments = [];
     private byte[]? firstFragment;
     private readonly HashSet<ushort> contexts = [];
-    internal byte[] Feed(ReadOnlySpan<byte> input, string share)
+    private int maxTransmit = RpcLimits.MaxFragmentSize;
+    internal byte[] Feed(ReadOnlySpan<byte> input, string share) => Feed(input, new[] { share });
+
+    internal byte[] Feed(ReadOnlySpan<byte> input, IReadOnlyList<string> shares)
     {
         // Named-pipe writes can split PDUs; RPC requests can also span multiple PDUs.
         // Both buffering layers are capped before concatenation.
@@ -54,13 +57,13 @@ internal sealed class RpcService
                 fragments = [];
             }
 
-            output = Process(packet, share);
+            output = Process(packet, shares);
         }
 
         return output;
     }
 
-    private byte[] Process(byte[] r, string share)
+    private byte[] Process(byte[] r, IReadOnlyList<string> shares)
     {
         // Accept only little-endian NDR32 calls on a successfully bound context.
         if (r.Length < RpcHeader.Size || r.Length > RpcLimits.MaxFragmentSize || r[RpcHeader.VersionOffset] != RpcHeader.Version || r[RpcHeader.VersionMinorOffset] != 0 || (r[RpcHeader.FlagsOffset] & RpcPacketFlags.CompleteFragment) != RpcPacketFlags.CompleteFragment || (r[RpcHeader.FlagsOffset] & ~RpcPacketFlags.Supported) != 0 || r[RpcHeader.DataRepresentationOffset] != RpcHeader.LittleEndianDataRepresentation || Wire.ReadUInt16LittleEndian(r, RpcHeader.FragmentLengthOffset) != r.Length || Wire.ReadUInt16LittleEndian(r, RpcHeader.AuthLengthOffset) != 0)
@@ -73,6 +76,25 @@ internal sealed class RpcService
             b[RpcHeader.DataRepresentationOffset] = RpcHeader.LittleEndianDataRepresentation;
             Wire.WriteUInt16LittleEndian(b, RpcHeader.FragmentLengthOffset, b.Length);
             Wire.WriteUInt32LittleEndian(b, RpcHeader.CallIdOffset, Wire.ReadUInt32LittleEndian(r, RpcHeader.CallIdOffset));
+            if (type == RpcPacketType.Response && b.Length > maxTransmit)
+            {
+                var fragments = new List<byte[]>();
+                int payload = b.Length - RpcResponse.HeaderSize;
+                for (int offset = 0; offset < payload;)
+                {
+                    int count = Math.Min(maxTransmit - RpcResponse.HeaderSize, payload - offset);
+                    var fragment = new byte[RpcResponse.HeaderSize + count];
+                    b.AsSpan(0, RpcResponse.HeaderSize).CopyTo(fragment);
+                    fragment[RpcHeader.FlagsOffset] = (byte)((offset == 0 ? RpcPacketFlags.FirstFragment : 0) |
+                        (offset + count == payload ? RpcPacketFlags.LastFragment : 0));
+                    Wire.WriteUInt16LittleEndian(fragment, RpcHeader.FragmentLengthOffset, fragment.Length);
+                    Wire.WriteUInt32LittleEndian(fragment, RpcResponse.AllocationHintOffset, (uint)(payload - offset));
+                    b.AsSpan(RpcResponse.HeaderSize + offset, count).CopyTo(fragment.AsSpan(RpcResponse.HeaderSize));
+                    fragments.Add(fragment);
+                    offset += count;
+                }
+                return Wire.Join(fragments.ToArray());
+            }
             return b;
         }
 
@@ -80,6 +102,8 @@ internal sealed class RpcService
         {
             if (r.Length < RpcBind.FixedSize || r[RpcBind.ContextCountOffset] is 0 or > RpcLimits.MaxContexts)
                 throw new SmbException(NtStatus.InvalidParameter);
+            maxTransmit = Wire.ReadUInt16LittleEndian(r, RpcBindAck.MaxReceiveFragmentOffset);
+            if (maxTransmit < 1024) throw new SmbException(NtStatus.InvalidParameter);
             int p = RpcBind.FixedSize;
             var results = new List<byte[]>();
             contexts.Clear();
@@ -114,7 +138,7 @@ internal sealed class RpcService
             var endpoint = Encoding.ASCII.GetBytes("\\PIPE\\srvsvc\0");
             int end = (RpcBindAck.FixedSize + endpoint.Length + 3) & ~3;
             var b = new byte[end + RpcBindAck.ResultListHeaderSize];
-            Wire.WriteUInt16LittleEndian(b, RpcBindAck.MaxTransmitFragmentOffset, RpcLimits.MaxFragmentSize);
+            Wire.WriteUInt16LittleEndian(b, RpcBindAck.MaxTransmitFragmentOffset, maxTransmit);
             Wire.WriteUInt16LittleEndian(b, RpcBindAck.MaxReceiveFragmentOffset, RpcLimits.MaxFragmentSize);
             Wire.WriteUInt32LittleEndian(b, RpcBindAck.AssociationGroupIdOffset, 1);
             Wire.WriteUInt16LittleEndian(b, RpcBindAck.SecondaryAddressLengthOffset, endpoint.Length);
@@ -160,14 +184,15 @@ internal sealed class RpcService
             _ = ReadString();
         int op = Wire.ReadUInt16LittleEndian(r, RpcRequest.OpnumOffset);
         uint status;
-        string Name(int i) => i == 0 ? share : "IPC$";
-        string Remark(int i) => i == 0 ? "SMB3 files" : "Remote IPC";
+        int shareCount = shares.Count + 1;
+        string Name(int i) => i < shares.Count ? shares[i] : "IPC$";
+        string Remark(int i) => i < shares.Count ? "SMB3 files" : "Remote IPC";
         void Fixed(uint level, int i)
         {
             writer.WriteUInt32((uint)(SrvsvcReferent.ShareName + i * SrvsvcReferent.ShareStride));
             if (level == SrvsvcShareInfoLevel.Name)
                 return;
-            writer.WriteUInt32(i == 0 ? SrvsvcShareType.DiskTree : SrvsvcShareType.Ipc | SrvsvcShareType.Special);
+            writer.WriteUInt32(i < shares.Count ? SrvsvcShareType.DiskTree : SrvsvcShareType.Ipc | SrvsvcShareType.Special);
             writer.WriteUInt32((uint)(SrvsvcReferent.ShareRemark + i * SrvsvcReferent.ShareStride));
             if (level == SrvsvcShareInfoLevel.Path)
             {
@@ -194,12 +219,14 @@ internal sealed class RpcService
             if (level != tag || container == 0 || entries != 0 || (buffer != 0 && ReadUInt32() != 0))
                 throw new SmbException(NtStatus.InvalidParameter);
             uint maximum = ReadUInt32(), resumePtr = ReadUInt32(), resume = resumePtr == 0 ? 0 : ReadUInt32();
+            // Leave bounded room for NDR framing and per-fragment RPC headers.
+            maximum = Math.Min(maximum, 32768u);
             if (pos != r.Length || level > SrvsvcShareInfoLevel.Path)
                 throw new SmbException(NtStatus.NotSupported);
-            int start = (int)Math.Min(resume, RpcLimits.ShareCount), count = 0;
+            int start = (int)Math.Min(resume, shareCount), count = 0;
             uint used = 0;
             static uint StringCost(string value) => (uint)(12 + (((value.Length + 1) * 2 + 3) & ~3));
-            for (int i = start; i < RpcLimits.ShareCount; i++)
+            for (int i = start; i < shareCount; i++)
             {
                 uint cost = 4 + StringCost(Name(i));
                 if (level > SrvsvcShareInfoLevel.Name)
@@ -226,11 +253,11 @@ internal sealed class RpcService
                     Strings(level, i);
             }
 
-            writer.WriteUInt32((uint)(RpcLimits.ShareCount - start));
+            writer.WriteUInt32((uint)(shareCount - start));
             writer.WriteUInt32(resumePtr == 0 ? 0u : SrvsvcReferent.ResumeHandle);
             if (resumePtr != 0)
                 writer.WriteUInt32((uint)(start + count));
-            status = start + count < RpcLimits.ShareCount ? Win32Error.MoreData : Win32Error.Success;
+            status = start + count < shareCount ? Win32Error.MoreData : Win32Error.Success;
         }
         else if (op == SrvsvcOpnum.NetrShareGetInfo)
         {
@@ -238,7 +265,9 @@ internal sealed class RpcService
             uint level = ReadUInt32();
             if (pos != r.Length)
                 throw new SmbException(NtStatus.InvalidParameter);
-            int index = name.Equals(share, StringComparison.OrdinalIgnoreCase) ? 0 : name.Equals("IPC$", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
+            int index = -1;
+            for (int i = 0; i < shareCount; i++)
+                if (name.Equals(Name(i), StringComparison.OrdinalIgnoreCase)) { index = i; break; }
             writer.WriteUInt32(level);
             if (index < 0)
             {
@@ -254,7 +283,7 @@ internal sealed class RpcService
             {
                 writer.WriteUInt32(SrvsvcReferent.Container);
                 if (level == SrvsvcShareInfoLevel.Flags)
-                    writer.WriteUInt32(index == 0 ? Smb3ShareFlags.NoCaching : 0);
+                    writer.WriteUInt32(index < shares.Count ? Smb3ShareFlags.NoCaching : 0);
                 else
                 {
                     Fixed(level, index);

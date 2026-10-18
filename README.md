@@ -12,27 +12,31 @@ The filesystem and command model is adapted from the local
 cryptography, and filesystem access execute in the C# process. Samba is only an
 independent interoperability test dependency.
 
-The server provides one configured account and disk share, plus `IPC$`/`srvsvc`
-share enumeration. It supports NTLMv2, SHA-512 preauthentication integrity,
+The server registers a storage provider for each named share, plus `IPC$`/`srvsvc`
+share enumeration. Providers can expose application data without a backing directory.
+Windows and Linux directory providers are included. The server supports NTLMv2,
+native Kerberos authentication, SHA-512 preauthentication integrity,
 AES-128-CMAC signing, AES-128-GCM/CCM encryption, compounds, Unicode filenames,
 64-bit file offsets, directory enumeration, create/read/write/flush, truncation,
-rename, deletion, and share-access enforcement across its connections.
+rename, deletion, share-access enforcement across its connections, and negotiated
+unchained LZNT1 compression.
 
 Encryption is required by default; signing is required for unencrypted sessions.
 Shares are read-only unless writable service is enabled. SMB1 file operations,
-guest access, Kerberos/domain integration, leases/oplocks, byte-range locks,
+guest access, leases/oplocks, byte-range locks,
 durable handles, multichannel, change notifications, alternate streams, Windows
-ACL management, compression, and Apple AAPL extensions are outside this file
+ACL management and Apple AAPL extensions are outside this file
 transfer implementation. Applications requiring these facilities need a server
 that implements them. Sessions and handles cannot be recovered after reconnect.
 
-The export must be a trusted directory managed by the service account. Paths
+Directory-provider exports must be trusted directories managed by the service account. Paths
 reject traversal, symbolic links/reparse points, streams, and DOS device names.
 Do not permit other untrusted local processes to replace directory components
 while the server is running: path validation is not an operating-system sandbox.
 Run with filesystem permissions limited to the intended export.
 
-Windows timestamps and attributes use native filesystem APIs. Linux preserves
+The Windows directory provider uses native timestamps and attributes. The Linux
+directory provider preserves
 logical creation/change timestamps and hidden/archive attributes in `user.tedd.smb3.*`
 xattrs; the backing filesystem and backups must preserve them. Explicit logical
 timestamp updates return an error when the filesystem cannot persist them.
@@ -124,21 +128,69 @@ using Tedd.SMB3;
 
 string password = Environment.GetEnvironmentVariable("TEDD_SMB_PASSWORD")
     ?? throw new InvalidOperationException("Set TEDD_SMB_PASSWORD.");
+ISmbShareProvider provider = SmbDirectoryProvider.Create(args[0]);
 await using var server = new SmbServer(new()
 {
-    RootPath = args[0],
-    ShareName = "files",
+    Shares = [new("files", provider) { Writable = true }],
     UserName = "smbuser",
     Password = password,
     ListenAddress = IPAddress.Any,
     Port = 1445,
-    Writable = true,
     RequireEncryption = true
 });
 using var stop = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop.Cancel(); };
 await server.RunAsync(stop.Token);
 ```
+
+A server accepts up to 256 shares in `SmbServerOptions.Shares`, with a separate
+`Writable` policy and optional `Authorize` predicate for each. For example,
+`Shares = [new("documents", applicationProvider) { Writable = true },
+new("files", SmbDirectoryProvider.Create(exportPath))]` combines application data
+with a read-only directory. `SmbDirectoryProvider.Create` selects
+`WindowsDirectoryProvider` or `LinuxDirectoryProvider` for the current OS.
+`RootPath`, `ShareName`, and `Writable` remain a shorthand for one directory share;
+configure either `RootPath` or `Shares`.
+
+Implement `ISmbShareProvider` for custom storage. All paths are share-relative,
+use `/` separators, and represent the root as an empty string. `ResolvePath`
+provides canonical names; object IDs and volume IDs must remain stable through
+renames. `ISmbFile` supplies offset-based asynchronous I/O, length changes and
+flush. Providers supply metadata, capacity, enumeration and namespace changes
+without exposing native handles. The application owns provider resources and
+must keep them alive until server shutdown. The server coordinates its own
+opens; providers must enforce their backing store's containment and concurrency
+requirements. Reuse the same provider instance when exposing aliases of one store.
+
+The .NET client negotiates LZNT1 compression by default. `EnableCompression = false`
+disables it in either client or server options. Compression runs before encryption
+and after signing; uncompressible data remains uncompressed. Chained compression
+and other compression algorithms are not supported.
+
+For Kerberos server authentication, set `AuthenticationProvider` to
+`new SmbKerberosAuthentication("cifs/hostname@REALM", keytabPath)` on Linux, or omit
+the keytab argument on Windows to use the service account's credentials. Linux
+requires MIT Kerberos GSSAPI, a realm configuration, a service keytab and a private
+writable replay-cache directory (`KRB5RCACHEDIR`). Windows requires the service
+account and SPN to be configured in its domain. Kerberos authenticates the caller;
+it does not impersonate the caller for provider operations. Every share must
+supply an explicit `Authorize` predicate when an external authentication provider
+is configured. A Linux example is:
+
+```csharp
+AuthenticationProvider = new SmbKerberosAuthentication(
+    "cifs/files.example.test@EXAMPLE.TEST", "/etc/service/files.keytab"),
+Shares = [new("documents", applicationProvider)
+{
+    Authorize = principal => principal == "reader@EXAMPLE.TEST"
+}]
+```
+
+The console host accepts `--kerberos-principal cifs/hostname@REALM`, an explicit
+`--user allowed-principal`, and `--keytab PATH` on Linux. It permits only that
+principal to connect to its share. `ISmbAuthenticationProvider` supports other
+application authentication integrations that produce SMB session keys. The .NET
+client currently authenticates with NTLMv2.
 
 ## Mount from Windows
 
@@ -246,6 +298,29 @@ the workspace. The C# client acceptance executable runs on either OS:
 TEDD_SMB_USER=root TEDD_SMB_PASSWORD=testpass dotnet Tedd.SMB3.Tests.dll client HOST 1447 files false
 TEDD_SMB_USER=root TEDD_SMB_PASSWORD=testpass dotnet Tedd.SMB3.Tests.dll client HOST 1447 files true
 ```
+
+For a disposable Samba AD Kerberos realm inside WSL, build into a dedicated
+workspace and start the following in a WSL root terminal:
+
+```sh
+sh tests/interop/StartSambaAD.sh /mnt/d/Workspaces/AI/tedd-smb3-build
+```
+
+The realm uses `SMB3.TEST`, a loopback-only KDC, test accounts, and task-local
+configuration/keytab/database files on tmpfs. It requires the Samba AD tools,
+MIT GSSAPI, Python Samba bindings, and Python cryptography package. It does not
+join Windows to a domain or change system DNS/Kerberos configuration. In a second
+WSL root terminal, run:
+
+```sh
+sh tests/interop/KerberosAcceptance.sh /mnt/d/Workspaces/AI/tedd-smb3-build
+```
+
+The client uses Samba GENSEC with a mandatory Kerberos mechanism. Checks include
+SMB signing, encryption, compression, file transfer, share authorization and
+Kerberos replay rejection. Windows SSPI domain interoperability requires a
+separately configured Windows domain environment. Stop the test KDC before
+unmounting its `samba-ad` directory and removing the task workspace.
 
 Protocol references:
 [MS-SMB2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-smb2/),
