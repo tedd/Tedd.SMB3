@@ -1,5 +1,6 @@
 Generated with the built-in image_gen tool.
 Revision: use a uniform solid #087f78 fill for the large SMB3 headline, without brushed texture, shading, or gradients. Generated edit followed by deterministic headline color normalization; letter edges retain antialiasing.
+Typography revision: remove embossed, beveled, textured and shaded treatments from all fonts. Use flat #13282f ink for Tedd. and platform labels, #61747b for subtitle and footer, and retain solid #087f78 for SMB3. Preserve letter silhouettes, positions and the illustration. Built-in image_gen edit plus deterministic text-fill normalization.
 
 Use case: ads-marketing.
 Asset type: polished LinkedIn article cover for the open-source C# library Tedd.SMB3. Generate a new wide landscape image at approximately 2:1 aspect ratio, ideally 1792 x 896 or a high-resolution equivalent.
