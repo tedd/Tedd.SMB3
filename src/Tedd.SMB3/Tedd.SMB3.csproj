@@ -1,10 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <PackageId>Tedd.SMB3</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Authors>tedd</Authors>
     <Company>Tedd Hansen</Company>
-    <Description>Managed SMB 3.1.1 client and file server for .NET 10 on Windows and Linux, with NTLMv2 authentication, signing, and encryption.</Description>
+    <Description>Managed SMB 3.1.1 client and provider-backed multi-share server for .NET 10 on Windows and Linux, with signing, encryption, LZNT1 compression, and NTLMv2 or server-side Kerberos authentication.</Description>
     <PackageTags>smb;smb3;client;server;filesharing;network</PackageTags>
     <PackageProjectUrl>https://tedd.no/Tedd.SMB3/</PackageProjectUrl>
     <RepositoryUrl>https://github.com/tedd/Tedd.SMB3.git</RepositoryUrl>

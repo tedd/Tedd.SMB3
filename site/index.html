@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f7faf9">
-  <meta name="description" content="Managed SMB 3.1.1 client and file server for .NET 10. Use C# APIs or mount encrypted shares from Windows and Linux.">
+  <meta name="description" content="SMB 3.1.1 for .NET 10. Serve multiple shares from application-defined storage providers, use C# APIs, or mount encrypted shares from Windows and Linux.">
   <meta property="og:title" content="Tedd.SMB3 — SMB 3.1.1 for .NET">
-  <meta property="og:description" content="Connect in C#. Serve a directory. Mount from Windows or Linux.">
+  <meta property="og:description" content="One C# server, multiple shares. Supply storage providers for directories, SQL-backed files, memory, or remote services.">
   <meta property="og:type" content="website">
   <title>Tedd.SMB3 — SMB 3.1.1 for .NET</title>
   <link rel="canonical" href="https://tedd.no/Tedd.SMB3/">
@@ -18,7 +18,7 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <header class="site-header">
     <a class="brand" href="#top" aria-label="Tedd.SMB3 home"><img src="assets/smb-icon.svg" width="34" height="34" alt=""><span>TEDD<span class="brand-slash">/</span>SMB3</span></a>
-    <nav aria-label="Primary navigation"><a href="#examples">C# examples</a><a href="#mount">Mount a share</a><a href="#scope">Capabilities</a><a class="nav-cta" href="https://github.com/tedd/Tedd.SMB3">Source ↗</a></nav>
+    <nav aria-label="Primary navigation"><a href="#examples">C# examples</a><a href="#providers">Storage providers</a><a href="#mount">Mount a share</a><a href="#scope">Capabilities</a><a class="nav-cta" href="https://github.com/tedd/Tedd.SMB3">Source ↗</a></nav>
   </header>
   <main id="main">
     <section class="hero" id="top">
@@ -35,21 +35,21 @@
         <ul class="hero-checks"><li>.NET 10</li><li>Windows + Linux</li><li>No runtime package dependencies</li></ul>
       </div>
       <figure class="index-figure">
-        <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><b>One share · three ways to connect</b><i>3.1.1</i></div>
+        <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><b>Multiple shares · one server</b><i>3.1.1</i></div>
         <div class="diagram-panel">
           <div class="diagram-heading"><span>SMB CLIENTS</span><strong>NTLMv2 / Kerberos authentication</strong></div>
           <div class="endpoints"><div><b>C#</b><code>SmbClient</code></div><div><b>Windows</b><code>\\server\files</code></div><div><b>Linux</b><code>mount.cifs</code></div></div>
           <div class="connection"><span>↓</span><p>SMB 3.1.1 · encrypted transport</p><span>↓</span></div>
-          <div class="server-box"><span>MANAGED C# SERVER</span><strong>SmbServer</strong><code>files → your export directory</code></div>
+          <div class="server-box"><span>MANAGED C# SERVER</span><strong>SmbServer</strong><code>files → directory provider</code><code>documents → application provider</code></div>
           <div class="diagram-result"><span>DEFAULT POLICY</span><strong>Encryption required · read-only share</strong></div>
         </div>
-        <figcaption>Networking, authentication, cryptography, and filesystem access run inside the .NET process.</figcaption>
+        <figcaption>Each share uses its own storage provider. The server runs inside .NET, independently of Windows-registered shares.</figcaption>
       </figure>
     </section>
     <section class="fact-strip" aria-label="Library characteristics">
       <p><strong>SMB 3.1.1</strong><span>SHA-512 preauthentication integrity</span></p>
       <p><strong>Protected sessions</strong><span>AES-128-GCM / CCM encryption and CMAC signing</span></p>
-      <p><strong>Client + server</strong><span>Async C# APIs and a foreground console host</span></p>
+      <p><strong>Client + server</strong><span>Async C# APIs and multiple provider-backed shares</span></p>
       <p><strong>Native mounts</strong><span>Windows SMB client and Linux CIFS</span></p>
     </section>
     <section class="section-shell examples-section" id="examples">
@@ -116,6 +116,71 @@ while ((count = await remote.ReadAsync(buffer, offset)) &gt; 0)
       </div>
       <p class="model-note">The server example exposes a writable share on all IPv4 interfaces. Choose a specific listen address and restrict filesystem and network access to the intended clients. The defaults are loopback, port 445, read-only, and encryption required.</p>
     </section>
+    <section class="section-shell providers-section" id="providers">
+      <div class="section-intro"><div><p class="eyebrow">Application-defined storage</p><h2>One server.<br>Multiple providers.</h2></div><p>Register up to 256 named shares, each backed by an <code>ISmbShareProvider</code>. Supply your own implementation for SQL-backed documents, object storage, memory, or a remote API. A physical directory is optional.</p></div>
+      <div class="example-grid">
+        <div class="provider-example"><p class="example-description">Pass application providers into your server factory. Here, <code>documents</code> is writable; <code>reports</code> and the directory share are read-only.</p><div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>Register multiple shares</b><button type="button" data-copy-target="provider-shares">Copy</button></div><pre><code id="provider-shares">using System.Net;
+using Tedd.SMB3;
+
+public static class ShareHosting
+{
+    public static SmbServer Create(
+        ISmbShareProvider documents,
+        ISmbShareProvider reports,
+        string exportPath,
+        string userName,
+        string password) =&gt; new(new SmbServerOptions
+    {
+        Shares =
+        [
+            new("documents", documents) { Writable = true },
+            new("reports", reports),
+            new("files", SmbDirectoryProvider.Create(exportPath))
+        ],
+        UserName = userName,
+        Password = password,
+        ListenAddress = IPAddress.Loopback,
+        Port = 1445,
+        RequireEncryption = true
+    });
+}</code></pre></div></div>
+        <div class="provider-example"><p class="example-description">Your provider's <code>OpenFile</code> can return this read-only handle for a BLOB loaded from SQL or an API. This example keeps the complete BLOB in memory.</p><div class="code-window"><div class="window-bar"><span></span><span></span><span></span><b>An application-backed file handle</b><button type="button" data-copy-target="provider-blob">Copy</button></div><pre><code id="provider-blob">using Tedd.SMB3;
+
+public sealed class BlobFile(ReadOnlyMemory&lt;byte&gt; data) : ISmbFile
+{
+    public long Length =&gt; data.Length;
+
+    public ValueTask&lt;int&gt; ReadAsync(
+        Memory&lt;byte&gt; buffer, long offset,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        if (offset &gt;= Length) return ValueTask.FromResult(0);
+
+        int count = (int)Math.Min(buffer.Length, Length - offset);
+        data.Slice((int)offset, count).CopyTo(buffer);
+        return ValueTask.FromResult(count);
+    }
+
+    public ValueTask WriteAsync(
+        ReadOnlyMemory&lt;byte&gt; buffer, long offset,
+        CancellationToken cancellationToken) =&gt;
+        throw new NotSupportedException("Read-only file.");
+
+    public void SetLength(long length) =&gt;
+        throw new NotSupportedException("Read-only file.");
+
+    public void Flush() { }
+    public void Dispose() { }
+}</code></pre></div></div>
+      </div>
+      <div class="provider-details">
+        <p><code>ISmbShareProvider</code> supplies logical paths, directory enumeration, metadata, stable file identities, capacity, and namespace operations. <code>ISmbFile</code> supplies positional I/O and handle lifetime. SQL queries, transactions, and storage connections belong to your provider; a SQL provider is not bundled.</p>
+        <p><code>SmbDirectoryProvider.Create(path)</code> selects <code>WindowsDirectoryProvider</code> or <code>LinuxDirectoryProvider</code>. Custom providers require neither a local path nor a native file handle. The application owns provider resources and keeps them alive until server shutdown.</p>
+      </div>
+      <p class="model-note">Share registration belongs to this server instance and does not create or modify Windows shares. Use an available address and port; the system SMB service may already occupy port 445. Providers are selected at construction; live provider replacement is not supported. See the <a href="https://github.com/tedd/Tedd.SMB3/blob/main/src/Tedd.SMB3/SmbShare.cs">provider interfaces</a> and <a href="https://github.com/tedd/Tedd.SMB3/blob/main/README.md#host-a-share-from-c">hosting reference</a>.</p>
+    </section>
     <section class="section-shell host-section" id="host">
       <div class="section-intro"><div><p class="eyebrow">Console host</p><h2>A directory becomes<br>a network share.</h2></div><p>Clone the source and build the host with the .NET 10 SDK. Create the export directory first, set a password in the process environment, then start the foreground server.</p></div>
       <div class="example-grid">
@@ -172,7 +237,7 @@ sudo umount /mnt/tedd-smb</code></pre></div><p><code>seal</code> requests SMB en
       <div class="capability-grid">
         <article><span class="step">01 / Files</span><h3>Read, write, manage</h3><p>Create and list directories. Read, write, flush, truncate, rename, and delete files. Use explicit 64-bit offsets and query or update timestamps and attributes.</p></article>
         <article><span class="step">02 / Sessions</span><h3>Bounded connections</h3><p>64 KiB transfers, 32 credits, 32 compound commands, 64 trees and 1,024 handles per connection; 32 connections by default. Requests on each connection execute in order.</p></article>
-        <article><span class="step">03 / Security</span><h3>Trusted export directory</h3><p>Traversal and symbolic links are rejected. Protect the export from untrusted local directory replacement and run with filesystem permissions limited to the intended export.</p></article>
+        <article><span class="step">03 / Storage</span><h3>Provider-owned access</h3><p>Shares have separate write and authorization policies. Directory providers reject traversal and symbolic links; protect exports from untrusted local directory replacement. Application providers enforce their backing store's access and concurrency rules.</p></article>
       </div>
       <div class="scope-note"><h3>Deployment considerations</h3><p>Shares register application storage providers or the included Windows and Linux directory providers. Authentication supports NTLMv2 or native Kerberos; external authentication requires an explicit share authorizer. Unchained LZNT1 compression is negotiated per connection. Guest access, leases/oplocks, byte-range locks, durable handles, multichannel, change notifications, alternate streams, and Windows ACL management are outside this implementation. Sessions and handles cannot be recovered after reconnect.</p><p>The Linux directory provider’s logical creation/change timestamps and hidden/archive attributes use <code>user.tedd.smb3.*</code> extended attributes. The backing filesystem and backups must preserve them. Independent server instances need separate exports.</p></div>
     </section>
