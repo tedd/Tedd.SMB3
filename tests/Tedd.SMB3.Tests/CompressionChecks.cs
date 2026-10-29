@@ -9,7 +9,39 @@ internal static class CompressionChecks
         var literal = new byte[10];
         SmbCompression.Decode(Convert.FromHexString("03B002410600"), literal);
         if (literal.Any(x => x != 0x41)) throw new Exception("LZNT1 overlapping backreference fixture failed.");
-        foreach (int size in new[] { 1024, 4095, 4096, 4097, 65536 })
+        foreach (var (position, shift) in new[]
+        {
+            (2, 12), (15, 12), (16, 12), (17, 11), (31, 11), (32, 11), (33, 10),
+            (63, 10), (64, 10), (65, 9), (127, 9), (128, 9), (129, 8),
+            (255, 8), (256, 8), (257, 7), (511, 7), (512, 7), (513, 6),
+            (1023, 6), (1024, 6), (1025, 5), (2047, 5), (2048, 5), (2049, 4)
+        })
+        {
+            // Literal prefixes place a distance-two token on each MS-XCA width boundary.
+            var encoded = new List<byte> { 0, 0 };
+            for (int i = 0; i <= position;)
+            {
+                int flag = encoded.Count;
+                encoded.Add(0);
+                for (int bit = 0; bit < 8 && i <= position; bit++, i++)
+                {
+                    if (i < position) encoded.Add((byte)(i % 2));
+                    else
+                    {
+                        encoded[flag] |= (byte)(1 << bit);
+                        encoded.Add((byte)(1 << shift));
+                        encoded.Add((byte)((1 << shift) >> 8));
+                    }
+                }
+            }
+            int header = 0xb000 | (encoded.Count - 3);
+            encoded[0] = (byte)header; encoded[1] = (byte)(header >> 8);
+            byte[] decoded = new byte[position + 3];
+            SmbCompression.Decode(encoded.ToArray(), decoded);
+            for (int i = 0; i < decoded.Length; i++)
+                if (decoded[i] != i % 2) throw new Exception($"LZNT1 token width failed at {position}.");
+        }
+        foreach (int size in new[] { 64, 1023, 1024, 4095, 4096, 4097, 65536, 65537 })
         foreach (int pattern in new[] { 0, 1, 2 })
         {
             byte[] packet = pattern == 2 ? RandomNumberGenerator.GetBytes(size) : new byte[size];

@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace Tedd.SMB3;
 
 /// <summary>Bounded MS-XCA LZNT1 chunks and unchained SMB 3.1.1 compression transforms.</summary>
@@ -93,9 +95,8 @@ internal static class SmbCompression
 
     private static int Shift(int position)
     {
-        int shift = 12;
-        while (shift > 4 && (1 << (16 - shift)) < position) shift--;
-        return shift;
+        // Chunk positions are at most 4096; boundaries retain the preceding token width.
+        return position <= 16 ? 12 : BitOperations.LeadingZeroCount((uint)(position - 1)) - 16;
     }
     private static int Hash(ReadOnlySpan<byte> data, int position) => ((data[position] * 251 + data[position + 1]) * 251 + data[position + 2]) & 0xfff;
     private static byte[] Encode(ReadOnlySpan<byte> chunk)
