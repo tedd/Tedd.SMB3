@@ -51,7 +51,11 @@ public abstract class SmbDirectoryProvider : ISmbShareProvider
         {
             string? exact = null, match = null;
             int matches = 0;
-            if (Directory.Exists(path))
+            string? candidate = OperatingSystem.IsWindows() ? Path.Combine(path, part) : null;
+            // Only an ordinal-exact native result can bypass the ambiguity scan.
+            if (candidate != null && FileMetadata.HasExactName(candidate, part))
+                exact = candidate;
+            else if (Directory.Exists(path))
             {
                 foreach (string entry in Directory.EnumerateFileSystemEntries(path))
                 {
@@ -65,7 +69,7 @@ public abstract class SmbDirectoryProvider : ISmbShareProvider
             }
             if (exact == null && matches > 1)
                 throw new SmbException(NtStatus.ObjectNameCollision);
-            path = exact ?? (matches == 1 ? match! : Path.Combine(path, part));
+            path = exact ?? (matches == 1 ? match! : candidate ?? Path.Combine(path, part));
             try
             {
                 if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)

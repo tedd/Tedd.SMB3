@@ -21,6 +21,34 @@ internal static class FileMetadata
 
     private const uint StoredDosAttributes = FileAttributeFlags.Hidden | FileAttributeFlags.Archive;
     private const uint ReportedDosAttributes = FileAttributeFlags.ReadOnly | FileAttributeFlags.Hidden | FileAttributeFlags.System | FileAttributeFlags.Directory | FileAttributeFlags.Archive;
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct FindData
+    {
+        public uint Attributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime, LastAccessTime, LastWriteTime;
+        public uint SizeHigh, SizeLow, Reserved0, Reserved1;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string FileName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string AlternateFileName;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern FindHandle FindFirstFileW(string path, out FindData data);
+    [DllImport("kernel32.dll", ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FindClose(nint handle);
+
+    private sealed class FindHandle : SafeHandleZeroOrMinusOneIsInvalid
+    {
+        public FindHandle() : base(true) { }
+        protected override bool ReleaseHandle() => FindClose(handle);
+    }
+
+    internal static bool HasExactName(string path, string name)
+    {
+        using var handle = FindFirstFileW(path, out var data);
+        return !handle.IsInvalid && string.Equals(data.FileName, name, StringComparison.Ordinal);
+    }
+
     [DllImport("libc", SetLastError = true)]
     private static extern int statx(int dirfd, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags, uint mask, [Out] byte[] info);
     [DllImport("libc", SetLastError = true)]

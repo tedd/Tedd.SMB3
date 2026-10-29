@@ -57,6 +57,7 @@ Hex("4E544C4D5353500001000000358208E2000000000000000000000000000000000A000000000
     Ntlm.Negotiate(), "NTLM negotiate wire fixture");
 await ProtocolChecks.RunAsync(root);
 await AllocationRefactorChecks.RunAsync(root);
+await DirectoryNameChecks.RunAsync(root);
 await ProviderChecks.RunAsync(root);
 CompressionChecks.Run();
 RpcShareChecks.Run();

@@ -1,0 +1,937 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-29",
+  "baselineRevision": "db9e77405d4449239492218d67347c3f59d90f31",
+  "integrationBranch": "main",
+  "change": "Windows literal-name lookup bypasses sibling enumeration only when the native long name equals the requested component ordinally. Other results retain the original case/ambiguity scan; reparse-point checks remain in place. No name cache is introduced.",
+  "scope": "Existing 1 KiB files opened, read to EOF and closed over encrypted SMB 3.1.1 loopback. One client/session with compression negotiated, warm filesystem caches, directory-backed storage.",
+  "environment": {
+    "os": "Windows x64 10.0.26200",
+    "processor": "AMD Ryzen 9 5950X 16-Core Processor",
+    "logicalProcessors": 32,
+    "sdk": "10.0.402",
+    "runtime": "10.0.14",
+    "configuration": "Release",
+    "tieredCompilation": true,
+    "tieredPGO": true
+  },
+  "method": {
+    "unit": "One complete SmbClient.ReadAllBytesAsync call: CREATE, READ to EOF, CLOSE.",
+    "cases": [
+      {
+        "id": "smb3-small-1024-exact",
+        "filesInDirectory": 1024,
+        "requestSpelling": "Exact Unicode component spelling",
+        "inputHash": "7CD89797FEE6C3664297322C1671DF5AF011616FB549341F33C255BAB724EDF4"
+      },
+      {
+        "id": "smb3-small-32-mixed",
+        "filesInDirectory": 32,
+        "requestSpelling": "ToUpperInvariant of stored mixed-case Unicode names",
+        "inputHash": "23A9CB4059808F316A709B417E62622982CEDB8F69C3DFC01D72ED20F03077CB"
+      }
+    ],
+    "fileBytes": 1024,
+    "fileSequence": "Stride 73 through the namespace; the complete benchmark source and seed recipe are retained.",
+    "independentPairsPerCase": 16,
+    "freshProcessesPerCase": 32,
+    "operationsPerMeasuredBatch": 256,
+    "warmupBatches": 2,
+    "measuredOperationsPerArmPerCase": 4096,
+    "totalMeasuredFileOperations": 16384,
+    "seeds": [
+      "7333",
+      "7334"
+    ],
+    "primaryMetric": "Elapsed nanoseconds per completed file",
+    "observer": "quiet-validation; no EventPipe, native profiler, debugger, startup hooks or additional dependencies in timed processes",
+    "oracle": "Every measured returned buffer must match its deterministic expected payload and an independent backing-file read, outside timing.",
+    "outsideTiming": "Fixture seeding, server/client setup and authentication, namespace count check, warmup, byte/backing-file validation, disposal and joined shutdown.",
+    "variants": "Fresh baseline/candidate entry DLLs execute their own provider implementation; arm labels do not switch implementations within a process.",
+    "familyAlpha": 0.05,
+    "familySize": 4,
+    "intervalCoverage": 0.9875,
+    "prospectiveGates": {
+      "exact1024": "At least 5% latency improvement; process allocation regression <=4096 bytes/file.",
+      "mixed32": "At least 1024 bytes/file allocation reduction; latency regression <=10%."
+    },
+    "mutex": "Local\\ForcecraftPerformance held across both complete studies and final profile",
+    "leaseStartUtc": "2026-10-29T12:47:41.4120333Z",
+    "leaseEndUtc": "2026-10-29 12:56:16 UTC",
+    "exclusions": "None. All 64 normal-build sessions retained; no post-hoc budget extension."
+  },
+  "results": {
+    "exact1024": {
+      "means": {
+        "baseline": {
+          "geometricMeanNanosecondsPerFile": 5050781.383020637,
+          "filesPerSecond": 197.98916725276015,
+          "meanAllocationBytesPerFile": 924052.92578125
+        },
+        "candidate": {
+          "geometricMeanNanosecondsPerFile": 1878319.6036760276,
+          "filesPerSecond": 532.3907592951257,
+          "meanAllocationBytesPerFile": 186456.650390625
+        }
+      },
+      "promotionEligible": true,
+      "latencyRatio": 0.3718869341663493,
+      "latencyRatioConfidenceInterval": {
+        "lower": 0.35425197392506685,
+        "upper": 0.390399777512321,
+        "coverage": 0.9875
+      },
+      "throughputMultiplier": 2.6889893355400556,
+      "throughputMultiplierConfidenceInterval": {
+        "lower": 2.5614768696133288,
+        "upper": 2.8228494789178646,
+        "coverage": 0.9875
+      },
+      "allocationDifferenceBytesPerFile": -737596.275390625,
+      "allocationDifferenceConfidenceInterval": {
+        "lower": -737762.0661310214,
+        "upper": -737430.4846502286,
+        "coverage": 0.9875
+      },
+      "allocationReductionPercent": 79.82186461527803,
+      "comparison": "cmp-0fd4f1303a49cb16681994a3b2c959b8c33cb912d9dc55c89e864122245b62cf",
+      "objectiveVector": "objectives-bcc79c805c2e4f4e305a9952c26f3886bc154c7282133ffba1bebec1cfdeb63a"
+    },
+    "mixed32": {
+      "means": {
+        "baseline": {
+          "geometricMeanNanosecondsPerFile": 2079396.0017282832,
+          "filesPerSecond": 480.9088789094782,
+          "meanAllocationBytesPerFile": 211690.966796875
+        },
+        "candidate": {
+          "geometricMeanNanosecondsPerFile": 1859897.9841271495,
+          "filesPerSecond": 537.6638979848673,
+          "meanAllocationBytesPerFile": 192180.1796875
+        }
+      },
+      "promotionEligible": true,
+      "latencyRatio": 0.8944414544325825,
+      "latencyRatioConfidenceInterval": {
+        "lower": 0.8623000433295369,
+        "upper": 0.9277809059575051,
+        "coverage": 0.9875
+      },
+      "throughputMultiplier": 1.1180161597433809,
+      "throughputMultiplierConfidenceInterval": {
+        "lower": 1.077840677231832,
+        "upper": 1.159689145020534,
+        "coverage": 0.9875
+      },
+      "allocationDifferenceBytesPerFile": -19510.787109375,
+      "allocationDifferenceConfidenceInterval": {
+        "lower": -19612.040264278236,
+        "upper": -19409.533954471764,
+        "coverage": 0.9875
+      },
+      "allocationReductionPercent": 9.21663659276321,
+      "comparison": "cmp-d0a84a98f3c4fe8a34dacba3bf1c8be4bf2134c776567294a319c22cbdbb88a0",
+      "objectiveVector": "objectives-17b63336443084d16ce3c2871104da86cdba0f74b41f64a8a4a119b8b79a6a9e"
+    }
+  },
+  "audit": {
+    "allSessionsCorrectAndQuiescent": true,
+    "distinctPidStartIdentities": 64,
+    "completedFilesPerSession": 256,
+    "epoch": "0",
+    "runtime": "10.0.14",
+    "exitCodes": 0,
+    "entryAndDependencyHashes": "Matched retained baseline/candidate manifests; runtime configuration hashes identical.",
+    "nativeProfiler": false,
+    "debugger": false,
+    "startupHooks": "",
+    "additionalDependencies": ""
+  },
+  "validation": {
+    "build": "Release harness and solution builds passed with zero warnings/errors.",
+    "tests": "Complete Tedd.SMB3.Tests executable passed.",
+    "newChecks": [
+      "Exact/mixed-case canonical path resolution against an independent linear directory walk",
+      "Unicode, long components and 255-UTF16-unit native name buffers",
+      "Root/missing names and invalid path/device/wildcard rejection",
+      "External rename/delete visibility, provider create/move, stable file identity",
+      "Exact-case preference and ambiguous-case rejection when the filesystem supports distinct case aliases"
+    ],
+    "skipped": "Directory symbolic-link fixture: host could not create symbolic links. Existing root/component reparse-point checks are unchanged.",
+    "nativeResourceLifetime": "Search handles use SafeHandle and FindClose.",
+    "codegen": "Algorithm/OS-lookup change; no SIMD, unchecked memory access, or JIT-visibility claim."
+  },
+  "profiling": {
+    "baselineExecution": "exec-8d4a9120c9a74b4a8cff79bbecb26622",
+    "baselineStack": {
+      "id": "stack-analysis-2a8916f2eb2b44e6b074b8c59e600270",
+      "capture_id": "cap-a011db709ac44a3694aa645df0e6acfa",
+      "artifact_id": "art-9095aab4c8335bd17ab474b03379606587116c598a60b7ec7b8d76d8766867ef",
+      "observed_samples": "802",
+      "methods": 306,
+      "symbol_coverage": 1,
+      "quality": {
+        "coverage": "partial",
+        "loss_status": "unknown",
+        "parser_version": "traceevent-stack/1",
+        "warnings": [
+          "stack_loss_status_unknown"
+        ],
+        "symbol_coverage": 1
+      }
+    },
+    "baselineFindings": {
+      "globalSamples": 802,
+      "physicalInclusiveSamples": 28,
+      "enumeratorInclusiveSamples": 26,
+      "findNextEntrySelfSamples": 16,
+      "note": "Overlapping inclusive counts are not additive. Global samples include idle/background threads; no exact critical-path fraction, invocation count or off-CPU latency is inferred."
+    },
+    "jitContentionExecution": "exec-d582b12e27524162ba1b023069930474",
+    "jitContentionAnalysis": "analysis-e1456bfa55984ae19795a634887ee277",
+    "contentionsObserved": 0,
+    "physicalInliningFailures": "No Physical-specific failure records in the retained capture.",
+    "postExecution": "exec-4cf7de66c1d24518bd51ef459a1db21f",
+    "postStack": {
+      "id": "stack-analysis-b93ca2c47c9f4ca39fc70b2997321811",
+      "capture_id": "cap-9458a5c7684549b1bcccb275c47c942f",
+      "artifact_id": "art-1e88b9d2ea8ecee0d11826d5d053f5de8b8580c53939ed5ad3ee250cdc2537d8",
+      "observed_samples": "10764",
+      "methods": 560,
+      "symbol_coverage": 0.9999861347974988,
+      "quality": {
+        "coverage": "partial",
+        "loss_status": "unknown",
+        "parser_version": "traceevent-stack/1",
+        "warnings": [
+          "stack_loss_status_unknown",
+          "unresolved_stack_frames"
+        ],
+        "symbol_coverage": 0.9999861347974988
+      }
+    },
+    "postFinding": "Post-change stacks show native exact-name lookup and metadata work. Profile run budgets differ; sampled counts do not establish the measured speedup."
+  },
+  "evidence": {
+    "catalog": "D:\\Workspaces\\AI\\dotnetlab-workspace",
+    "hypothesis": "hyp-6a6157b84bdd43d49b53daf0eb51b5b1",
+    "baselineBuild": "build-e2e2f4b9fd7d4acb98eb931794064bea",
+    "candidateBuild": "build-d1c7aabede04404c8e130d2c2db9f28c",
+    "exactPlan": "confirm-plan-f79b188958214440a1f9d1ac53d70287",
+    "mixedPlan": "confirm-plan-7a3e6fa15c054d2e83c3215850b5dc67",
+    "exactExecution": "op-f7e65bf7066f4c56aec69d1be96987c3-confirmation",
+    "mixedExecution": "op-c2a9d7c68c9649f2acc41436cb1372bb-confirmation",
+    "sourcePatchArtifact": "art-437fa93cb0cd696e9a791d34662477690c49980a4f516e07410049f11b4d50d6",
+    "benchmarkSourceZipArtifact": "art-cf713647ba19e5a46796c4ba8de5f8f62a73a34b15355d27bced24770a9329db",
+    "baselineFiles": [
+      {
+        "artifact_id": "art-e2f116d04f53f806c43f1d6a6bd7d8f3619c26d54ced56f29219c65ebfa69c8d",
+        "name": "ScratchBench.dll"
+      },
+      {
+        "artifact_id": "art-02e5425f98b415c3c430dbeff2abbd55ba6074454fa1557c4aab10d0cb6fff9f",
+        "name": "ScratchBench.deps.json"
+      },
+      {
+        "artifact_id": "art-f027877695c6bb36a16df5863c4f5fdf9d8c8f9fdd9e7e8a8fc4e08dd770076e",
+        "name": "ScratchBench.runtimeconfig.json"
+      },
+      {
+        "artifact_id": "art-d3872c439eacaa43f6a90ba3c548faf1d7b215136bf437dee8230e2e096580d2",
+        "name": "Tedd.DotNetLab.Harness.dll"
+      },
+      {
+        "artifact_id": "art-9ae12d9cef699760fc14b472d36a6209d8b9ba83dbf87094e6b37eed84dcda71",
+        "name": "Tedd.DotNetLab.Contracts.dll"
+      },
+      {
+        "artifact_id": "art-6d2242016a29926c498c74d5c39d46b3900806cd97f0e2d9476c08ef5f97a103",
+        "name": "Tedd.DotNetLab.Transport.Local.dll"
+      }
+    ],
+    "candidateFiles": [
+      {
+        "artifact_id": "art-3719829facfbd164bb78b4fb3b49c5e47fd0053d1a07d5836b1e05fd56b373df",
+        "name": "ScratchBench.dll"
+      },
+      {
+        "artifact_id": "art-02e5425f98b415c3c430dbeff2abbd55ba6074454fa1557c4aab10d0cb6fff9f",
+        "name": "ScratchBench.deps.json"
+      },
+      {
+        "artifact_id": "art-f027877695c6bb36a16df5863c4f5fdf9d8c8f9fdd9e7e8a8fc4e08dd770076e",
+        "name": "ScratchBench.runtimeconfig.json"
+      },
+      {
+        "artifact_id": "art-d3872c439eacaa43f6a90ba3c548faf1d7b215136bf437dee8230e2e096580d2",
+        "name": "Tedd.DotNetLab.Harness.dll"
+      },
+      {
+        "artifact_id": "art-9ae12d9cef699760fc14b472d36a6209d8b9ba83dbf87094e6b37eed84dcda71",
+        "name": "Tedd.DotNetLab.Contracts.dll"
+      },
+      {
+        "artifact_id": "art-6d2242016a29926c498c74d5c39d46b3900806cd97f0e2d9476c08ef5f97a103",
+        "name": "Tedd.DotNetLab.Transport.Local.dll"
+      }
+    ]
+  },
+  "references": [
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstfilew",
+    "https://learn.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-win32_find_dataw",
+    "https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/Common/src/Interop/Windows/Kernel32/Interop.WIN32_FIND_DATA.cs",
+    "https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Private.CoreLib/src/System/IO/Enumeration/FileSystemEnumerator.Windows.cs"
+  ],
+  "limits": [
+    "One Windows host, directories with 1024 or 32 names, and 1 KiB existing-file reads; create/write/delete, remote-network, cold-cache and larger namespace throughput were not established.",
+    "Linux retains the prior lookup path; Linux throughput was not measured.",
+    "Fresh process pairs on one host are not independent machines. Unrelated OS background work remains uncontrolled.",
+    "Batch means do not establish individual-operation p95/p99 latency."
+  ],
+  "sessions": {
+    "exact1024": [
+      {
+        "session": "normal-session-1bf51b7658d24e57a4b5612600cbc00b",
+        "block": 0,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 89052,
+        "startTimeUtcTicks": "639288748737597136",
+        "nanosecondsPerFile": 4769628.125,
+        "allocatedBytesPerFile": 924004.9375
+      },
+      {
+        "session": "normal-session-2abf58c3a5e142488d5ca47b6e0099cd",
+        "block": 0,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 106208,
+        "startTimeUtcTicks": "639288748785399097",
+        "nanosecondsPerFile": 1874880.859375,
+        "allocatedBytesPerFile": 186395.5625
+      },
+      {
+        "session": "normal-session-7483b2f3dfb2430290122d80e8b0ac1a",
+        "block": 1,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 20316,
+        "startTimeUtcTicks": "639288748805359712",
+        "nanosecondsPerFile": 1878534.765625,
+        "allocatedBytesPerFile": 186414.3125
+      },
+      {
+        "session": "normal-session-24cdeac27b154123be525ea126197f35",
+        "block": 1,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 2864,
+        "startTimeUtcTicks": "639288748825563522",
+        "nanosecondsPerFile": 4916512.890625,
+        "allocatedBytesPerFile": 923995.46875
+      },
+      {
+        "session": "normal-session-9ed157de8abd408cb19ca34389878305",
+        "block": 2,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 156236,
+        "startTimeUtcTicks": "639288748871707473",
+        "nanosecondsPerFile": 4984401.5625,
+        "allocatedBytesPerFile": 924255.96875
+      },
+      {
+        "session": "normal-session-52161c4b7c5241d680c972eece77c2df",
+        "block": 2,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 153960,
+        "startTimeUtcTicks": "639288748918019656",
+        "nanosecondsPerFile": 1797358.984375,
+        "allocatedBytesPerFile": 186407.4375
+      },
+      {
+        "session": "normal-session-7c0240d2015f40e1a8394ef6ba77eb50",
+        "block": 3,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 113544,
+        "startTimeUtcTicks": "639288748937865720",
+        "nanosecondsPerFile": 5955986.71875,
+        "allocatedBytesPerFile": 924008.65625
+      },
+      {
+        "session": "normal-session-3c76b8a86a1a494db9f5a3b3f4eb52dd",
+        "block": 3,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 68436,
+        "startTimeUtcTicks": "639288748989979347",
+        "nanosecondsPerFile": 1808688.28125,
+        "allocatedBytesPerFile": 186664.0625
+      },
+      {
+        "session": "normal-session-d9df9b591d9943d6a140f2a173e81bca",
+        "block": 4,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 114440,
+        "startTimeUtcTicks": "639288749009931639",
+        "nanosecondsPerFile": 5290790.234375,
+        "allocatedBytesPerFile": 924001.75
+      },
+      {
+        "session": "normal-session-11f852cf418243299d382e8e481c0a7f",
+        "block": 4,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 115748,
+        "startTimeUtcTicks": "639288749057550540",
+        "nanosecondsPerFile": 1866541.40625,
+        "allocatedBytesPerFile": 185771.9375
+      },
+      {
+        "session": "normal-session-16fd8c6e457b431285ca4b4062794d1f",
+        "block": 5,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 115240,
+        "startTimeUtcTicks": "639288749091535070",
+        "nanosecondsPerFile": 4741469.140625,
+        "allocatedBytesPerFile": 923998.0625
+      },
+      {
+        "session": "normal-session-4743bcea8eab4c90be9f3e1aae0f538c",
+        "block": 5,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 58784,
+        "startTimeUtcTicks": "639288749143610023",
+        "nanosecondsPerFile": 1752193.75,
+        "allocatedBytesPerFile": 186657.3125
+      },
+      {
+        "session": "normal-session-5523a4ed5e70401d969bcee4b0735eff",
+        "block": 6,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 49464,
+        "startTimeUtcTicks": "639288749163426498",
+        "nanosecondsPerFile": 4797329.6875,
+        "allocatedBytesPerFile": 924014.4375
+      },
+      {
+        "session": "normal-session-c3c78e4b5bd3439fb0c16527b67e7ea6",
+        "block": 6,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 119048,
+        "startTimeUtcTicks": "639288749209228549",
+        "nanosecondsPerFile": 1842455.078125,
+        "allocatedBytesPerFile": 186673.5
+      },
+      {
+        "session": "normal-session-c092f7adc2194e83a9f79d5c98c35d80",
+        "block": 7,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 116068,
+        "startTimeUtcTicks": "639288749229258639",
+        "nanosecondsPerFile": 1868446.09375,
+        "allocatedBytesPerFile": 186399.875
+      },
+      {
+        "session": "normal-session-b66158bc87a1438d8014bbcd6fd3e59d",
+        "block": 7,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 113504,
+        "startTimeUtcTicks": "639288749249346446",
+        "nanosecondsPerFile": 4705660.9375,
+        "allocatedBytesPerFile": 923995.59375
+      },
+      {
+        "session": "normal-session-c1f938e2cb3b499aa2c438a3ad2877f2",
+        "block": 8,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 65060,
+        "startTimeUtcTicks": "639288749295017041",
+        "nanosecondsPerFile": 1858915.234375,
+        "allocatedBytesPerFile": 186404.4375
+      },
+      {
+        "session": "normal-session-b00b375bf676420bbc1b35841cb9efab",
+        "block": 8,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 76336,
+        "startTimeUtcTicks": "639288749315238793",
+        "nanosecondsPerFile": 5275525,
+        "allocatedBytesPerFile": 924008.1875
+      },
+      {
+        "session": "normal-session-4b6c425daf1a4c3a8e145a45bb7f48a6",
+        "block": 9,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 45196,
+        "startTimeUtcTicks": "639288749362672989",
+        "nanosecondsPerFile": 1873033.203125,
+        "allocatedBytesPerFile": 186402.28125
+      },
+      {
+        "session": "normal-session-f1074b1353c8437181b4637f51bc83cb",
+        "block": 9,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 65656,
+        "startTimeUtcTicks": "639288749382834673",
+        "nanosecondsPerFile": 5056073.046875,
+        "allocatedBytesPerFile": 924002.0625
+      },
+      {
+        "session": "normal-session-383b4b60d9a8406fbd3ef9e38bbcf83f",
+        "block": 10,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 110560,
+        "startTimeUtcTicks": "639288749430292210",
+        "nanosecondsPerFile": 1947293.75,
+        "allocatedBytesPerFile": 186400.28125
+      },
+      {
+        "session": "normal-session-149a3ab4842c4999ab4f7152a816f7e1",
+        "block": 10,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 81780,
+        "startTimeUtcTicks": "639288749451388495",
+        "nanosecondsPerFile": 5103703.515625,
+        "allocatedBytesPerFile": 924013.6875
+      },
+      {
+        "session": "normal-session-fe04a624765a4527a46827287883da97",
+        "block": 11,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 40636,
+        "startTimeUtcTicks": "639288749500170153",
+        "nanosecondsPerFile": 5038395.3125,
+        "allocatedBytesPerFile": 924269.9375
+      },
+      {
+        "session": "normal-session-89e66367f4dd40d489e617e81501a522",
+        "block": 11,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 70484,
+        "startTimeUtcTicks": "639288749547877782",
+        "nanosecondsPerFile": 1988018.359375,
+        "allocatedBytesPerFile": 186667.125
+      },
+      {
+        "session": "normal-session-b2f6c8b9338c4a5b8f565ac952e84d6b",
+        "block": 12,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 168876,
+        "startTimeUtcTicks": "639288749569156370",
+        "nanosecondsPerFile": 4951730.859375,
+        "allocatedBytesPerFile": 923996.21875
+      },
+      {
+        "session": "normal-session-8b9cf66d83794f20a86d4231b2d8219e",
+        "block": 12,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 36084,
+        "startTimeUtcTicks": "639288749616444187",
+        "nanosecondsPerFile": 1935976.5625,
+        "allocatedBytesPerFile": 186398.15625
+      },
+      {
+        "session": "normal-session-332ea7d4469241928b854a7b04b87154",
+        "block": 13,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 92148,
+        "startTimeUtcTicks": "639288749637163142",
+        "nanosecondsPerFile": 1903757.421875,
+        "allocatedBytesPerFile": 186400
+      },
+      {
+        "session": "normal-session-2ba1b172078d41eb8e929ae71a75314f",
+        "block": 13,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 50300,
+        "startTimeUtcTicks": "639288749657787817",
+        "nanosecondsPerFile": 4991388.671875,
+        "allocatedBytesPerFile": 924261.09375
+      },
+      {
+        "session": "normal-session-ed5761eb147e417ea9e590eb3bb31f55",
+        "block": 14,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 76912,
+        "startTimeUtcTicks": "639288749705986211",
+        "nanosecondsPerFile": 1946071.484375,
+        "allocatedBytesPerFile": 186654.1875
+      },
+      {
+        "session": "normal-session-1c133410cba540c4b3b29d8185d202b1",
+        "block": 14,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 119800,
+        "startTimeUtcTicks": "639288749726614379",
+        "nanosecondsPerFile": 4926153.125,
+        "allocatedBytesPerFile": 924016.5625
+      },
+      {
+        "session": "normal-session-bd490006aff14d72bce3245c2b2010d6",
+        "block": 15,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 160584,
+        "startTimeUtcTicks": "639288749773928622",
+        "nanosecondsPerFile": 1926175,
+        "allocatedBytesPerFile": 186595.9375
+      },
+      {
+        "session": "normal-session-3c1492a6a43348c3893f682ec481f212",
+        "block": 15,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 55068,
+        "startTimeUtcTicks": "639288749794606552",
+        "nanosecondsPerFile": 5447935.9375,
+        "allocatedBytesPerFile": 924004.1875
+      }
+    ],
+    "mixed32": [
+      {
+        "session": "normal-session-ea42465296ca45a1b8e069d7575d7076",
+        "block": 0,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 90280,
+        "startTimeUtcTicks": "639288750484399559",
+        "nanosecondsPerFile": 1854511.328125,
+        "allocatedBytesPerFile": 192083.84375
+      },
+      {
+        "session": "normal-session-ca5fd6e44e6c46918af85a3163dcf39d",
+        "block": 0,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 164644,
+        "startTimeUtcTicks": "639288750504595502",
+        "nanosecondsPerFile": 2022181.640625,
+        "allocatedBytesPerFile": 211620.8125
+      },
+      {
+        "session": "normal-session-e17f7a2c866742bd81bf1461c6bf7527",
+        "block": 1,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 91316,
+        "startTimeUtcTicks": "639288750525998427",
+        "nanosecondsPerFile": 2092141.796875,
+        "allocatedBytesPerFile": 211881.96875
+      },
+      {
+        "session": "normal-session-c37fd99da83c4eb3802e3ddf5dbc4086",
+        "block": 1,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 169184,
+        "startTimeUtcTicks": "639288750547520256",
+        "nanosecondsPerFile": 1765502.734375,
+        "allocatedBytesPerFile": 192098.4375
+      },
+      {
+        "session": "normal-session-4dba424c8f784d989f9b505ad9936c38",
+        "block": 2,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 106976,
+        "startTimeUtcTicks": "639288750567044543",
+        "nanosecondsPerFile": 1982262.5,
+        "allocatedBytesPerFile": 211637.96875
+      },
+      {
+        "session": "normal-session-b0b062abd485422486a17149fcf4c90a",
+        "block": 2,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 91824,
+        "startTimeUtcTicks": "639288750588584048",
+        "nanosecondsPerFile": 1841342.1875,
+        "allocatedBytesPerFile": 192348.78125
+      },
+      {
+        "session": "normal-session-9e1e14bb43b640b594b4320195138bba",
+        "block": 3,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 111120,
+        "startTimeUtcTicks": "639288750608201423",
+        "nanosecondsPerFile": 2107049.609375,
+        "allocatedBytesPerFile": 211620.9375
+      },
+      {
+        "session": "normal-session-6c706c6fc78541da80774b9365a27876",
+        "block": 3,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 102252,
+        "startTimeUtcTicks": "639288750630028421",
+        "nanosecondsPerFile": 1827180.078125,
+        "allocatedBytesPerFile": 192111
+      },
+      {
+        "session": "normal-session-8f82af34ece44f82a574b70744ba1d6b",
+        "block": 4,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 117832,
+        "startTimeUtcTicks": "639288750650154412",
+        "nanosecondsPerFile": 2072562.5,
+        "allocatedBytesPerFile": 211639.0625
+      },
+      {
+        "session": "normal-session-871953df6b974a60ba18df49136592e5",
+        "block": 4,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 159964,
+        "startTimeUtcTicks": "639288750671847783",
+        "nanosecondsPerFile": 1854713.28125,
+        "allocatedBytesPerFile": 192534
+      },
+      {
+        "session": "normal-session-928a3375ca234ccaade10d7b3f1a7f9e",
+        "block": 5,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 60240,
+        "startTimeUtcTicks": "639288750691598845",
+        "nanosecondsPerFile": 1863115.234375,
+        "allocatedBytesPerFile": 192081.6875
+      },
+      {
+        "session": "normal-session-3f39dea7dfcc4b759ef7585aa27a1572",
+        "block": 5,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 108676,
+        "startTimeUtcTicks": "639288750711214077",
+        "nanosecondsPerFile": 1976205.078125,
+        "allocatedBytesPerFile": 211619.125
+      },
+      {
+        "session": "normal-session-f5880552992349948ea7067f6a250bc4",
+        "block": 6,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 163696,
+        "startTimeUtcTicks": "639288750732363401",
+        "nanosecondsPerFile": 1854333.984375,
+        "allocatedBytesPerFile": 192090.9375
+      },
+      {
+        "session": "normal-session-0663b590387e4aedb3ac0d989271b219",
+        "block": 6,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 156220,
+        "startTimeUtcTicks": "639288750752172054",
+        "nanosecondsPerFile": 2040521.09375,
+        "allocatedBytesPerFile": 211618.3125
+      },
+      {
+        "session": "normal-session-a7ae94a851c247fea1f0277087ef7f80",
+        "block": 7,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 99952,
+        "startTimeUtcTicks": "639288750773930006",
+        "nanosecondsPerFile": 1826194.53125,
+        "allocatedBytesPerFile": 192083.4375
+      },
+      {
+        "session": "normal-session-7f50bd872f7e4f94928d58050f1943d2",
+        "block": 7,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 87176,
+        "startTimeUtcTicks": "639288750793381567",
+        "nanosecondsPerFile": 2206395.3125,
+        "allocatedBytesPerFile": 211617.28125
+      },
+      {
+        "session": "normal-session-a96c2d1f5a1143fc80a5e91634652f80",
+        "block": 8,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 173724,
+        "startTimeUtcTicks": "639288750815147347",
+        "nanosecondsPerFile": 1978237.109375,
+        "allocatedBytesPerFile": 211890.875
+      },
+      {
+        "session": "normal-session-0737140d7add4401bcb34d533fd1d92c",
+        "block": 8,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 31088,
+        "startTimeUtcTicks": "639288750836476165",
+        "nanosecondsPerFile": 1813905.078125,
+        "allocatedBytesPerFile": 192353.65625
+      },
+      {
+        "session": "normal-session-71ce3fafbf3647579d96e0e8feb20779",
+        "block": 9,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 77488,
+        "startTimeUtcTicks": "639288750855797952",
+        "nanosecondsPerFile": 1812067.96875,
+        "allocatedBytesPerFile": 192082.8125
+      },
+      {
+        "session": "normal-session-588dcc35cfae46289bd50274e795ab9d",
+        "block": 9,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 85108,
+        "startTimeUtcTicks": "639288750875210269",
+        "nanosecondsPerFile": 1963544.53125,
+        "allocatedBytesPerFile": 211619.375
+      },
+      {
+        "session": "normal-session-124dcf2ddace4b92a6b936f683d1b889",
+        "block": 10,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 134948,
+        "startTimeUtcTicks": "639288750896580131",
+        "nanosecondsPerFile": 2036987.890625,
+        "allocatedBytesPerFile": 211632.46875
+      },
+      {
+        "session": "normal-session-dba3903b2e8e4de186103c63f7d62cda",
+        "block": 10,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 156884,
+        "startTimeUtcTicks": "639288750918009036",
+        "nanosecondsPerFile": 1785446.875,
+        "allocatedBytesPerFile": 192089.03125
+      },
+      {
+        "session": "normal-session-afc9cd99a0f349239d33dcf580a5e898",
+        "block": 11,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 72968,
+        "startTimeUtcTicks": "639288750937399151",
+        "nanosecondsPerFile": 1801551.5625,
+        "allocatedBytesPerFile": 192097.9375
+      },
+      {
+        "session": "normal-session-37d88849661946fba26bf62ba85fd00c",
+        "block": 11,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 27672,
+        "startTimeUtcTicks": "639288750957204144",
+        "nanosecondsPerFile": 2087086.328125,
+        "allocatedBytesPerFile": 211631.9375
+      },
+      {
+        "session": "normal-session-718f2a428c144f7aa938d53a91f3f6c8",
+        "block": 12,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 121352,
+        "startTimeUtcTicks": "639288750978573196",
+        "nanosecondsPerFile": 2174837.109375,
+        "allocatedBytesPerFile": 211618.375
+      },
+      {
+        "session": "normal-session-5ccb83dabc5c4132aa1aee029bee7b6d",
+        "block": 12,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 25448,
+        "startTimeUtcTicks": "639288751000908251",
+        "nanosecondsPerFile": 1839566.796875,
+        "allocatedBytesPerFile": 192104.28125
+      },
+      {
+        "session": "normal-session-ef6fdce6e5c44f96ac113b225119f52a",
+        "block": 13,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 147404,
+        "startTimeUtcTicks": "639288751021324548",
+        "nanosecondsPerFile": 1833545.703125,
+        "allocatedBytesPerFile": 192355.9375
+      },
+      {
+        "session": "normal-session-d078192fea24490cae24e800fd1d5ad4",
+        "block": 13,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 94764,
+        "startTimeUtcTicks": "639288751041579680",
+        "nanosecondsPerFile": 2169212.890625,
+        "allocatedBytesPerFile": 211888.5625
+      },
+      {
+        "session": "normal-session-be98c169575a42c0801a66684e302ebe",
+        "block": 14,
+        "arm": 0,
+        "variant": "candidate",
+        "pid": 157248,
+        "startTimeUtcTicks": "639288751064096469",
+        "nanosecondsPerFile": 1892202.34375,
+        "allocatedBytesPerFile": 192086.4375
+      },
+      {
+        "session": "normal-session-6bb9f763c7f14a9081bdf88594312b3f",
+        "block": 14,
+        "arm": 1,
+        "variant": "baseline",
+        "pid": 84544,
+        "startTimeUtcTicks": "639288751084244646",
+        "nanosecondsPerFile": 2056678.515625,
+        "allocatedBytesPerFile": 211619.625
+      },
+      {
+        "session": "normal-session-fc869751dd5f44cbaaa589236f6409f9",
+        "block": 15,
+        "arm": 0,
+        "variant": "baseline",
+        "pid": 181108,
+        "startTimeUtcTicks": "639288751105685522",
+        "nanosecondsPerFile": 2340133.984375,
+        "allocatedBytesPerFile": 211898.78125
+      },
+      {
+        "session": "normal-session-f2e00b78c015488e93fb1ef268db69bd",
+        "block": 15,
+        "arm": 1,
+        "variant": "candidate",
+        "pid": 132080,
+        "startTimeUtcTicks": "639288751128936763",
+        "nanosecondsPerFile": 2357236.71875,
+        "allocatedBytesPerFile": 192280.65625
+      }
+    ]
+  }
+}
