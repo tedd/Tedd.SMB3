@@ -520,7 +520,8 @@ public sealed class SmbFile : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         await client.WriteAsync(Id, data, offset, ct).ConfigureAwait(false);
-        Length = Math.Max(Length, checked(offset + data.Length));
+        if (!data.IsEmpty)
+            Length = Math.Max(Length, checked(offset + data.Length));
     }
 
     /// <summary>Requests that the server flush this handle to durable storage.</summary>

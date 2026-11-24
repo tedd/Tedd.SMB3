@@ -59,6 +59,8 @@ await ProtocolChecks.RunAsync(root);
 await AllocationRefactorChecks.RunAsync(root);
 await DirectoryNameChecks.RunAsync(root);
 await ProviderChecks.RunAsync(root);
+await ClientFileChecks.RunAsync(root);
+await ServerPolicyChecks.RunAsync(root);
 CompressionChecks.Run();
 RpcShareChecks.Run();
 Hex("31D6CFE0D16AE931B73C59D7E0C089C0", Crypto.Md4([]), "RFC1320 MD4 empty");
@@ -126,8 +128,17 @@ using (var stop = new CancellationTokenSource())
         string folder = "pagination-" + Guid.NewGuid().ToString("N"); Directory.CreateDirectory(Path.Combine(root, folder));
         try
         {
-            for (int i = 0; i < 400; i++) File.WriteAllBytes(Path.Combine(root, folder, i.ToString("D4") + new string('x', 80)), []);
-            if ((await client.ListDirectoryAsync(folder)).Count != 400) throw new Exception("Directory pagination lost entries."); Console.WriteLine("PASS multi-response directory pagination");
+            var expected = Enumerable.Range(0, 400).Select(i => i.ToString("D4") + new string('x', 80)).ToArray();
+            for (int i = 0; i < expected.Length; i++)
+                File.WriteAllBytes(Path.Combine(root, folder, expected[i]), new byte[i]);
+            var entries = (await client.ListDirectoryAsync(folder)).OrderBy(entry => entry.Name, StringComparer.Ordinal).ToArray();
+            Check.Equal(expected.Length, entries.Length, "paginated directory count");
+            for (int i = 0; i < expected.Length; i++)
+            {
+                Check.Equal(expected[i], entries[i].Name, $"paginated directory entry {i}");
+                Check.Equal((long)i, entries[i].Length, $"paginated size of {expected[i]}");
+            }
+            Console.WriteLine("PASS multi-response directory pagination preserves every name and size");
         }
         finally { Directory.Delete(Path.Combine(root, folder), true); }
         string file = "metadata-" + Guid.NewGuid().ToString("N"); await client.WriteAllBytesAsync(file, new byte[] { 9 });
