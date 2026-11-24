@@ -16,9 +16,9 @@ internal static class SmbCompression
         for (int start = 0; start < packet.Length; start += ChunkSize)
         {
             var chunk = packet.AsSpan(start, Math.Min(ChunkSize, packet.Length - start));
-            byte[] encoded = Encode(chunk);
+            ReadOnlySpan<byte> encoded = MustStoreRaw(chunk) ? chunk : Encode(chunk);
             bool compressed = encoded.Length < chunk.Length;
-            var data = compressed ? encoded.AsSpan() : chunk;
+            var data = compressed ? encoded : chunk;
             ushort header = (ushort)((compressed ? 0xb000 : 0x3000) | (data.Length - 1));
             output.WriteByte((byte)header); output.WriteByte((byte)(header >> 8)); output.Write(data);
         }
@@ -91,6 +91,29 @@ internal static class SmbCompression
                 throw new SmbException(NtStatus.InvalidParameter);
         }
         if (target != output.Length) throw new SmbException(NtStatus.InvalidParameter);
+    }
+
+    private static bool MustStoreRaw(ReadOnlySpan<byte> chunk)
+    {
+        if (chunk.Length < 1024) return false;
+
+        // A length-L reference replaces L literals with one token. Each of its L-1
+        // adjacent pairs must have occurred earlier, even when the reference overlaps.
+        // With R repeated pairs, there are at least N-R tokens, each costing at least
+        // one byte, plus one flag byte per eight tokens. At R <= N/9 this cannot shrink.
+        Span<ulong> seen = stackalloc ulong[512];
+        seen.Clear();
+        int repeats = 0, limit = chunk.Length / 9;
+        for (int i = 1; i < chunk.Length; i++)
+        {
+            // Folding the high bit can only overcount repeats, which favors encoding.
+            int pair = ((chunk[i - 1] & 0x7f) << 8) | chunk[i];
+            ref ulong word = ref seen[pair >> 6];
+            ulong bit = 1UL << (pair & 63);
+            if ((word & bit) != 0 && ++repeats > limit) return false;
+            word |= bit;
+        }
+        return true;
     }
 
     private static int Shift(int position)

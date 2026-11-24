@@ -77,11 +77,33 @@ internal static class CompressionChecks
             catch (SmbException) { continue; }
             throw new Exception("Malformed LZNT1 chunk accepted.");
         }
+        CheckMixedChunks();
         byte[] bomb = Transform([0x00, 0x30, 0], int.MaxValue);
         try { _ = SmbCompression.Decompress(bomb); throw new Exception("Oversized compression transform accepted."); }
         catch (SmbException) { }
         Console.WriteLine("PASS LZNT1 overlap, chunk boundaries, malformed input and decompression bounds" +
             (OperatingSystem.IsWindows() ? "; independent Windows native codec in both directions" : ""));
+    }
+
+    private static void CheckMixedChunks()
+    {
+        const int chunkSize = 4096;
+        byte[] packet = new byte[2 * chunkSize];
+        // Alternating disjoint alphabets produce distinct adjacent pairs in a full chunk.
+        for (int i = 0; i < chunkSize / 2; i++)
+        {
+            packet[2 * i] = (byte)(i / 64);
+            packet[2 * i + 1] = (byte)(64 + i % 64);
+        }
+        Wire.WriteUInt32LittleEndian(packet, 0, 0x424d53fe);
+        packet.AsSpan(0, 3 * chunkSize / 4).CopyTo(packet.AsSpan(chunkSize));
+
+        byte[] encoded = SmbCompression.Compress(packet);
+        if (encoded[0] != 0xfc || Wire.ReadUInt16LittleEndian(encoded, 16) != 0x3fff ||
+            !encoded.AsSpan(18, chunkSize).SequenceEqual(packet.AsSpan(0, chunkSize)) ||
+            (Wire.ReadUInt16LittleEndian(encoded, 18 + chunkSize) & 0x8000) == 0 ||
+            !SmbCompression.Decompress(encoded).AsSpan().SequenceEqual(packet))
+            throw new Exception("LZNT1 must preserve a raw chunk and compress a later chunk with a repetitive suffix.");
     }
 
     private static byte[] Transform(ReadOnlySpan<byte> compressed, int size)
