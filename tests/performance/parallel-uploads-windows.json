@@ -1,0 +1,57 @@
+{
+  "baselineRevision": "15e964c595cbd976c481bc0b169cb183421df73f",
+  "platform": "Windows x64, .NET 10.0.15, Release, Windows directory provider",
+  "change": "Use native Windows write metadata on open files without resolving the pathname again.",
+  "confirmation": {
+    "workload": "Four concurrent SMB 3.1.1 client sessions upload four distinct 16 MiB files to one physical loopback share. Encryption enabled and compression disabled in both arms. Completed payload is 64 MiB per operation.",
+    "design": "16 randomized fresh-process pairs, seed 34003, one warmup batch and four operations per measured batch. Every session validated SMB reads, on-disk length and contents, and the archive attribute. Setup, verification and durable flush are outside timing.",
+    "inputSha256": "DC163A876C33D1C78E8A282DD35893B490B8B1E3387C34CF1306ADDED5C9F8AB",
+    "baselineMiBPerSecondGeometricMean": 384.283,
+    "candidateMiBPerSecondGeometricMean": 542.079,
+    "throughputRatio": 1.4106,
+    "throughputRatio98_33PercentInterval": [1.1957, 1.6642],
+    "minimumElapsedTimeReduction": 0.03,
+    "familyAlpha": 0.05,
+    "familySize": 3
+  },
+  "pairColumns": ["block", "firstArm", "baselineNanosecondsPerOperation", "candidateNanosecondsPerOperation"],
+  "pairs": [
+    [0, "baseline", 160556800, 107543900],
+    [1, "baseline", 152542150, 106921000],
+    [2, "candidate", 153248900, 103018425],
+    [3, "candidate", 152732975, 113335775],
+    [4, "candidate", 158841600, 117409250],
+    [5, "baseline", 159035325, 108094600],
+    [6, "candidate", 146691775, 108756025],
+    [7, "baseline", 144805925, 106506700],
+    [8, "baseline", 152018825, 118180625],
+    [9, "baseline", 280967375, 111315850],
+    [10, "baseline", 144444500, 112745775],
+    [11, "baseline", 142871750, 127387725],
+    [12, "candidate", 190213800, 236109825],
+    [13, "baseline", 281366675, 134115850],
+    [14, "baseline", 158725500, 105125250],
+    [15, "candidate", 152089450, 114808025]
+  ],
+  "singleConnectionCheck": {
+    "workload": "Eight 64 MiB files per process, four random, two periodic, two mixed. Encryption and compression enabled. Order baseline, candidate, candidate, baseline. Descriptive pooled throughput excludes flush and validation.",
+    "uploadMiBPerSecond": { "baseline": 102.809, "candidate": 120.374 },
+    "downloadMiBPerSecond": { "baseline": 118.995, "candidate": 123.458 }
+  },
+  "tcpControl": {
+    "workload": "Raw unencrypted loopback, 64 KiB writes, 128 MiB per stream. Median of three measured transfers after warmup, with byte comparison. Decimal GB/s.",
+    "medianGBPerSecondByStreamCount": { "1": 0.457, "4": 0.522, "16": 0.549 },
+    "fastestActivePhysicalLinkGbPerSecond": 10
+  },
+  "dotnetlab": {
+    "plan": "confirm-plan-e868ed4d1af74542927f560e9033fab4",
+    "comparison": "cmp-3f6e76bbe28e2e3df641cd34e9bcdcf5d60cd1b46a7c4ca8641271156b32110f",
+    "postProfile": "stack-analysis-c39ff4ec8e4b42718ba219fc7409e69c",
+    "benchmarkSource": "art-d46dcc22d075d023da5fef40f353fa0b1f2b6e7f6d750208cef3ca54136f3e6b"
+  },
+  "otherExperiments": [
+    { "change": "Negotiate 1 MiB multi-credit file requests", "elapsedRatio": 0.9431, "interval95Percent": [0.8616, 1.0323], "comparison": "cmp-317fce8990271587b5ac60029eb862f0083dc37486461d15321b5d6cf235b7ee", "disposition": "Inconclusive in 16 fresh pairs of sequential encrypted transfers with compression enabled." },
+    { "change": "Defer LZNT1 output staging", "elapsedRatio": 1.0090, "comparison": "cmp-503f720dbb1d5a65f155d88f9e75f5908556f0c509d3fd071ea7f43e66331436", "disposition": "Did not meet the exploratory benefit threshold." },
+    { "change": "Scatter/gather Direct TCP header and existing payload on large frames", "elapsedRatio": 0.9984, "comparison": "cmp-193605b088d9f0a2e88e5128047162510fd1baca9b04608e383eb3f5fbf96158", "disposition": "Did not meet the exploratory benefit threshold on four encrypted upload streams." }
+  ]
+}

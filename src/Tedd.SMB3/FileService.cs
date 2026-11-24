@@ -489,7 +489,9 @@ internal sealed class FileService : IAsyncDisposable
             if ((handle.Access & FileAccessMask.WriteData) == 0)
                 offset = handle.Stream.Length;
             await handle.Stream.WriteAsync(data, offset, cancellationToken).ConfigureAwait(false);
-            handle.Provider!.MarkChanged(handle.Path, true);
+            // Windows maintains archive and change metadata on the open file handle.
+            if (handle.Provider is not WindowsDirectoryProvider)
+                handle.Provider!.MarkChanged(handle.Path, true);
             // Flush-to-disk has no asynchronous BCL equivalent; durability is mandatory.
             if ((Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.FlagsOffset) & Smb3WriteFlags.WriteThrough) != 0)
                 handle.Stream.Flush();

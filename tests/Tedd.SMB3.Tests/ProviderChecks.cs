@@ -26,6 +26,17 @@ internal static class ProviderChecks
             await client.WriteAllBytesAsync("folder/data.bin", new byte[] { 1, 2, 3, 4 });
             await isolated.WriteAllBytesAsync("folder", new byte[] { 9 });
             await disk.WriteAllBytesAsync("provider-disk.bin", new byte[] { 7 });
+            if (OperatingSystem.IsWindows())
+            {
+                string path = Path.Combine(root, "provider-disk.bin");
+                File.SetAttributes(path, FileAttributes.Normal);
+                var previousWrite = new DateTime(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+                File.SetLastWriteTimeUtc(path, previousWrite);
+                await using (var handle = await disk.OpenAsync("provider-disk.bin", FileMode.Open, FileAccess.Write))
+                    await handle.WriteAsync(new byte[] { 8 }, 0);
+                if (!File.GetAttributes(path).HasFlag(FileAttributes.Archive) || File.GetLastWriteTimeUtc(path) <= previousWrite)
+                    throw new Exception("Native write did not update Windows file metadata.");
+            }
             if (!client.IsCompressionEnabled) throw new Exception("LZNT1 compression was not negotiated.");
             byte[] zeros = new byte[65536];
             await client.WriteAllBytesAsync("compressed.bin", zeros);
@@ -45,7 +56,10 @@ internal static class ProviderChecks
             await using (var handle = await client.OpenAsync("folder/data.bin", FileMode.Open, FileAccess.ReadWrite))
             {
                 await handle.SetLengthAsync(12);
+                memory.LastArchivedPath = null;
                 await handle.WriteAsync(new byte[] { 5, 6 }, 8);
+                if (memory.LastArchivedPath != "folder/data.bin")
+                    throw new Exception("Custom provider missed the write notification.");
                 await handle.FlushAsync();
                 await handle.SetMetadataAsync(creationUtc: time, attributes: FileAttributes.Hidden);
             }
@@ -151,7 +165,11 @@ internal static class ProviderChecks
                 Attributes = update.Attributes ?? node.Metadata.Attributes
             };
         }
-        public void MarkChanged(string path, bool archive) { }
+        internal string? LastArchivedPath { get; set; }
+        public void MarkChanged(string path, bool archive)
+        {
+            if (archive) LastArchivedPath = path;
+        }
         private sealed class MemoryFile(Node node) : ISmbFile
         {
             public long Length => node.Data.Length;
