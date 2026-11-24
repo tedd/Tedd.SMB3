@@ -147,17 +147,7 @@ public sealed class SmbServer : IAsyncDisposable
                     transport = new SmbTransport(tcp.GetStream());
                 }
                 await using var direct = transport as SmbDirectTransport;
-                while (!ct.IsCancellationRequested)
-                {
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    timeout.CancelAfter(connection.Authenticated ? TimeSpan.FromMinutes(15) : TimeSpan.FromSeconds(30));
-                    var request = await transport.ReceiveAsync(timeout.Token).ConfigureAwait(false);
-                    var response = await connection.ProcessAsync(request, timeout.Token).ConfigureAwait(false);
-                    if (response.Length != 0)
-                        await transport.SendAsync(response, timeout.Token).ConfigureAwait(false);
-                    if (connection.LoggedOff)
-                        break;
-                }
+                await connection.RunAsync(transport, ct).ConfigureAwait(false);
             }
             catch (Exception e) when (e is IOException or SocketException or OperationCanceledException or CryptographicException or ArgumentException or OverflowException)
             {
@@ -197,6 +187,19 @@ internal sealed class ServerConnection : IAsyncDisposable
     private bool compression;
     internal bool Authenticated => crypto != null;
     internal bool LoggedOff { get; private set; }
+
+    internal async Task RunAsync(ISmbTransport transport, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && !LoggedOff)
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(Authenticated ? TimeSpan.FromMinutes(15) : TimeSpan.FromSeconds(30));
+            var request = await transport.ReceiveAsync(timeout.Token).ConfigureAwait(false);
+            var response = await ProcessAsync(request, timeout.Token).ConfigureAwait(false);
+            if (response.Length != 0)
+                await transport.SendAsync(response, timeout.Token).ConfigureAwait(false);
+        }
+    }
 
     internal ServerConnection(SmbServer server)
     {

@@ -4,39 +4,14 @@
 #include <windows.h>
 #include <wrl/client.h>
 #include <initguid.h>
-#include <ndsupport.h>
+#include "NetworkDirectCompletion.h"
+#include "NetworkDirectBuffers.h"
 #include <memory>
 #include <new>
 
 using Microsoft::WRL::ComPtr;
-constexpr ULONG depth = 8;
-constexpr ULONG capacity = 64 * 1024;
 #define API extern "C" __declspec(dllexport) HRESULT
 #define CHECK(call) do { HRESULT result = (call); if (FAILED(result)) return result; } while (false)
-
-struct Handle {
-    HANDLE value = nullptr;
-    ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
-};
-
-struct Operation {
-    OVERLAPPED ov{};
-    Handle event;
-    HRESULT init() {
-        event.value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        ov.hEvent = event.value;
-        return event.value ? S_OK : HRESULT_FROM_WIN32(GetLastError());
-    }
-    HRESULT finish(IND2Overlapped* owner, HRESULT status, HANDLE cancel) {
-        if (status != ND_PENDING) return status;
-        HANDLE handles[] = { event.value, cancel };
-        DWORD result = WaitForMultipleObjects(cancel ? 2 : 1, handles, FALSE, INFINITE);
-        if (result == WAIT_OBJECT_0) return owner->GetOverlappedResult(&ov, TRUE);
-        owner->CancelOverlappedRequests();
-        owner->GetOverlappedResult(&ov, TRUE); // Drain before reusing or releasing the OVERLAPPED.
-        return HRESULT_FROM_WIN32(ERROR_OPERATION_ABORTED);
-    }
-};
 
 // Keep NdStartup alive until all provider objects have been released.
 struct Runtime {
@@ -63,8 +38,7 @@ struct Connection {
     ComPtr<IND2CompletionQueue> rx, tx;
     ComPtr<IND2MemoryRegion> region;
     ComPtr<IND2QueuePair> pair;
-    unsigned char* buffers = nullptr; // Pinned managed storage owned by the connection SafeHandle.
-    unsigned char* spare = nullptr;
+    RegisteredBuffers buffers; // Pinned managed storage owned by the connection SafeHandle.
     bool registered = false;
 
     HRESULT post(unsigned char* slot) {
@@ -81,10 +55,9 @@ struct Connection {
         CHECK(a->CreateMemoryRegion(IID_IND2MemoryRegion, file, reinterpret_cast<void**>(region.GetAddressOf())));
         Operation op;
         CHECK(op.init());
-        CHECK(op.finish(region.Get(), region->Register(buffers, (depth + 2) * capacity, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &op.ov), cancel));
+        CHECK(op.finish(region.Get(), region->Register(buffers.base, (depth + 2) * capacity, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &op.ov), cancel));
         registered = true;
-        for (ULONG i = 0; i < depth; ++i) CHECK(post(buffers + i * capacity));
-        spare = buffers + depth * capacity;
+        for (ULONG i = 0; i < depth; ++i) CHECK(post(buffers.base + i * capacity));
         return S_OK;
     }
     ~Connection() {
@@ -100,15 +73,6 @@ struct Connection {
         region.Reset();
     }
 };
-
-static HRESULT completion(IND2CompletionQueue* cq, ND2_RESULT& item, HANDLE cancel) {
-    Operation op;
-    while (cq->GetResults(&item, 1) == 0) {
-        if (!op.event.value) CHECK(op.init());
-        CHECK(op.finish(cq, cq->Notify(ND_CQ_NOTIFY_ANY, &op.ov), cancel));
-    }
-    return item.Status;
-}
 
 API smbd_listen(const sockaddr* local, ULONG size, int backlog, USHORT* port, void** result) try {
     auto listener = std::make_shared<Listener>();
@@ -129,7 +93,7 @@ API smbd_accept(void* handle, unsigned char* buffers, ULONG bytes, HANDLE cancel
     auto& listener = *static_cast<std::shared_ptr<Listener>*>(handle);
     auto connection = std::make_unique<Connection>();
     connection->owner = listener;
-    connection->buffers = buffers;
+    connection->buffers.attach(buffers);
     CHECK(connection->init(cancel));
     Operation op;
     CHECK(op.init());
@@ -147,7 +111,7 @@ API smbd_finish_accept(Connection* c, HANDLE cancel) {
 API smbd_connect(const sockaddr* remote, ULONG size, unsigned char* buffers, ULONG bytes, HANDLE cancel, void** result) try {
     if (!buffers || bytes != (depth + 2) * capacity) return E_INVALIDARG;
     auto connection = std::make_unique<Connection>();
-    connection->buffers = buffers;
+    connection->buffers.attach(buffers);
     connection->owner = std::make_shared<Adapter>();
     auto& a = *connection->owner;
     CHECK(a.runtime.init());
@@ -170,7 +134,7 @@ API smbd_connect(const sockaddr* remote, ULONG size, unsigned char* buffers, ULO
 
 API smbd_send(Connection* c, ULONG size, HANDLE cancel) {
     if (size > capacity) return E_INVALIDARG;
-    auto slot = c->buffers + (depth + 1) * capacity;
+    auto slot = c->buffers.sendSlot();
     ND2_SGE sge{slot, size, c->region->GetLocalToken()};
     CHECK(c->pair->Send(slot, &sge, 1, 0));
     ND2_RESULT item{};
@@ -180,14 +144,7 @@ API smbd_send(Connection* c, ULONG size, HANDLE cancel) {
 API smbd_receive(Connection* c, HANDLE cancel, ULONG* offset, ULONG* received) {
     ND2_RESULT item{};
     CHECK(completion(c->rx.Get(), item, cancel));
-    if (item.BytesTransferred > capacity) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
-    auto slot = static_cast<unsigned char*>(item.RequestContext);
-    // Repost a different slot. This completion stays readable until the next receive.
-    CHECK(c->post(c->spare));
-    c->spare = slot;
-    *offset = static_cast<ULONG>(slot - c->buffers);
-    *received = item.BytesTransferred;
-    return S_OK;
+    return c->buffers.borrow(item, [c](unsigned char* spare) { return c->post(spare); }, offset, received);
 }
 
 extern "C" __declspec(dllexport) void smbd_close(Connection* c) { delete c; }

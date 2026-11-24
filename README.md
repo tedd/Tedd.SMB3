@@ -83,6 +83,12 @@ or pass `--smb-direct` to the server host. Bind to the adapter's IP address. Bot
 peers must use the same RDMA port (default 445). Selecting RDMA requires the
 provider to establish the connection. TCP remains the default.
 
+The native-enabled build runs Windows completion and registered-buffer tests
+using real event handles and a simulated provider. On Windows or Linux, run
+`dotnet Tedd.SMB3.Tests.dll smb-direct` from the test output directory to exercise
+negotiation, credits, keepalives, cancellation, and authenticated file transfers
+over simulated queues.
+
 To measure aggregate encrypted file throughput, use a dedicated writable test
 share and set `TEDD_SMB_USER` and `TEDD_SMB_PASSWORD` on the test client. This
 example transfers eight 256 MiB files across four sessions, reports reads and

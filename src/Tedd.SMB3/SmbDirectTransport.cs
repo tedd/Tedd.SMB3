@@ -31,22 +31,25 @@ internal sealed class SmbDirectTransport : ISmbTransport, IAsyncDisposable
     private TaskCompletionSource? creditWaiter;
     private Task receiver = Task.CompletedTask;
     private Task keepalive = Task.CompletedTask;
-    private long lastActivity = Environment.TickCount64;
+    private readonly TimeProvider clock;
+    private long lastActivity;
     private long receivedCount;
     private bool replyPending;
     private Exception? failure;
 
-    private SmbDirectTransport(IRdmaQueue queue)
+    private SmbDirectTransport(IRdmaQueue queue, TimeProvider clock)
     {
         if (queue.SendBuffer.Length < 128 || queue.ReceiveDepth is < 2 or > ushort.MaxValue)
             throw new ArgumentException("Insufficient RDMA queue capacity.", nameof(queue));
         this.queue = queue;
+        this.clock = clock;
+        lastActivity = clock.GetTimestamp();
         Outgoing[..32].Clear();
     }
 
-    internal static async ValueTask<SmbDirectTransport> NegotiateAsync(IRdmaQueue queue, bool server, CancellationToken ct)
+    internal static async ValueTask<SmbDirectTransport> NegotiateAsync(IRdmaQueue queue, bool server, CancellationToken ct, TimeProvider? clock = null)
     {
-        var t = new SmbDirectTransport(queue);
+        var t = new SmbDirectTransport(queue, clock ?? TimeProvider.System);
         using var timer = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timer.CancelAfter(TimeSpan.FromSeconds(5));
         ct = timer.Token;
@@ -118,21 +121,34 @@ internal sealed class SmbDirectTransport : ISmbTransport, IAsyncDisposable
     public async ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)
     {
         if (payload.Length == 0 || payload.Length > sendLimit) throw Invalid();
-        while (!payload.IsEmpty)
+        int messageLength = payload.Length;
+        try
         {
-            int length = Math.Min(sendSize - DataHeader, payload.Length);
-            while (!await TryPostAsync(payload[..length], payload.Length - length, false, ct).ConfigureAwait(false))
+            while (!payload.IsEmpty)
             {
-                Task wait;
-                lock (credits)
-                {
-                    if (failure != null) throw new IOException("SMB Direct connection closed.", failure);
-                    if (CanSend()) continue;
-                    wait = (creditWaiter ??= new(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
-                }
-                await wait.WaitAsync(ct).ConfigureAwait(false);
+                int length = Math.Min(sendSize - DataHeader, payload.Length);
+                while (!await TryPostAsync(payload[..length], payload.Length - length, false, ct).ConfigureAwait(false))
+                    await WaitForCreditAsync(ct).ConfigureAwait(false);
+                payload = payload[length..];
             }
-            payload = payload[length..];
+        }
+        catch (OperationCanceledException error) when (payload.Length != messageLength)
+        {
+            // The receiver is waiting for the rest of this message. A later packet
+            // cannot start a new message at this point on the same connection.
+            await FailAsync(new IOException("SMB Direct fragmented send was interrupted.", error)).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private Task WaitForCreditAsync(CancellationToken ct)
+    {
+        lock (credits)
+        {
+            if (failure != null) throw new IOException("SMB Direct connection closed.", failure);
+            if (CanSend()) return Task.CompletedTask;
+            creditWaiter ??= new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return creditWaiter.Task.WaitAsync(ct);
         }
     }
 
@@ -156,7 +172,7 @@ internal sealed class SmbDirectTransport : ISmbTransport, IAsyncDisposable
                 lock (credits)
                 {
                     receivedCount++;
-                    lastActivity = Environment.TickCount64;
+                    lastActivity = clock.GetTimestamp();
                     replyPending |= respond;
                     requested = ReadUInt16LittleEndian(incoming.Span, 0);
                     if (requested == 0 || receiveCredits == 0) throw Invalid();
@@ -177,49 +193,53 @@ internal sealed class SmbDirectTransport : ISmbTransport, IAsyncDisposable
         }
         catch (Exception error)
         {
-            lock (credits)
-            {
-                failure ??= error;
-                creditWaiter?.TrySetResult();
-            }
-            packets.Writer.TryComplete(error);
-            await stop.CancelAsync().ConfigureAwait(false);
+            await FailAsync(error).ConfigureAwait(false);
         }
     }
 
     private async Task KeepaliveAsync()
     {
-        const int interval = 120000;
+        var interval = TimeSpan.FromMinutes(2);
         var ct = stop.Token;
         try
         {
             while (true)
             {
                 long generation;
-                int delay;
+                TimeSpan delay;
                 lock (credits)
                 {
-                    delay = (int)Math.Max(0, interval - (Environment.TickCount64 - lastActivity));
+                    delay = interval - clock.GetElapsedTime(lastActivity);
                     generation = receivedCount;
                 }
-                if (delay > 0)
+                if (delay > TimeSpan.Zero)
                 {
-                    await Task.Delay(delay, ct).ConfigureAwait(false);
+                    await Task.Delay(delay, clock, ct).ConfigureAwait(false);
                     continue;
                 }
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 deadline.CancelAfter(TimeSpan.FromSeconds(5));
                 await TryPostAsync(ReadOnlyMemory<byte>.Empty, 0, true, deadline.Token).ConfigureAwait(false);
-                await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(5), clock, ct).ConfigureAwait(false);
                 lock (credits)
                     if (receivedCount == generation) throw new IOException("SMB Direct keepalive timed out.");
             }
         }
         catch (Exception error)
         {
-            lock (credits) failure ??= error;
-            await stop.CancelAsync().ConfigureAwait(false);
+            await FailAsync(error).ConfigureAwait(false);
         }
+    }
+
+    private Task FailAsync(Exception error)
+    {
+        lock (credits)
+        {
+            failure ??= error;
+            packets.Writer.TryComplete(failure);
+            creditWaiter?.TrySetResult();
+        }
+        return stop.CancelAsync();
     }
 
     private async ValueTask<bool> TryPostAsync(ReadOnlyMemory<byte> payload, int remaining, bool requestReply, CancellationToken ct)
@@ -238,9 +258,18 @@ internal sealed class SmbDirectTransport : ISmbTransport, IAsyncDisposable
                 replyPending = false;
                 sendCredits--;
                 receiveCredits += grant;
-                lastActivity = Environment.TickCount64;
+                lastActivity = clock.GetTimestamp();
             }
-            await WriteSegmentAsync(payload, remaining, grant, requestReply, ct).ConfigureAwait(false);
+            try
+            {
+                await WriteSegmentAsync(payload, remaining, grant, requestReply, ct).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                // The peer may already have consumed this fragment and its credit grant.
+                await FailAsync(error).ConfigureAwait(false);
+                throw;
+            }
             return true;
         }
         finally { sender.Release(); }

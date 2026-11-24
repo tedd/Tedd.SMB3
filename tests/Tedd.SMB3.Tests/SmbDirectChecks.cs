@@ -24,6 +24,8 @@ internal static class SmbDirectChecks
 
     internal static async Task RunAsync()
     {
+        await SmbDirectProtocolChecks.RunAsync();
+        await FileSessionsAsync();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var ct = timeout.Token;
         var a = Channel.CreateBounded<byte[]>(4);
@@ -126,5 +128,66 @@ internal static class SmbDirectChecks
         }
         Check.Bytes("abc"u8.ToArray(), assembler.Append(Convert.FromHexString("0400010000000000000000001800000002000000000000006263"))!, "SMBD final fragment");
         Console.WriteLine("PASS SMB Direct negotiation, credit exhaustion, fragmented messages, control traffic and wire fixtures");
+    }
+
+    private static async Task FileSessionsAsync()
+    {
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        foreach (var (clientEncrypt, serverEncrypt) in new[] { (false, false), (true, false), (false, true) })
+        {
+            var ct = watchdog.Token;
+            var store = new ProviderChecks.MemoryProvider();
+            await using var host = new SmbServer(new()
+            {
+                UserName = "fixture", Password = "fixture-secret", UseSmbDirect = true,
+                RequireEncryption = serverEncrypt, Shares = [new("data", store) { Writable = true }]
+            });
+            var requests = Channel.CreateBounded<byte[]>(4);
+            var replies = Channel.CreateBounded<byte[]>(4);
+            using var clientQueue = new Queue(replies, requests, 4096);
+            using var serverQueue = new Queue(requests, replies, 1024);
+            using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            async Task Serve()
+            {
+                await using var direct = await SmbDirectTransport.NegotiateAsync(serverQueue, true, shutdown.Token);
+                await using var connection = new ServerConnection(host);
+                await connection.RunAsync(direct, shutdown.Token);
+                Check.Equal(true, connection.LoggedOff, "RDMA session completed LOGOFF");
+            }
+            var serving = Serve();
+            try
+            {
+                var options = new SmbClientOptions
+                {
+                    UseSmbDirect = true, UserName = "fixture", Password = "fixture-secret", Encrypt = clientEncrypt,
+                    OpenRdmaQueue = (_, _, _) => Task.FromResult<IRdmaQueue>(clientQueue)
+                };
+                await using (var client = await SmbClient.ConnectAsync("fixture", "data", options, ct))
+                {
+                    Check.Equal(clientEncrypt || serverEncrypt, client.IsEncrypted, "negotiated file protection");
+                    Check.Equal(false, client.IsCompressionEnabled, "in-band RDMA compression policy");
+                    byte[] data = new byte[262177];
+                    new Random(743).NextBytes(data);
+                    await client.WriteAllBytesAsync("original.bin", data, ct);
+                    await client.MoveAsync("original.bin", "renamed.bin", ct: ct);
+                    await Check.StatusAsync(NtStatus.ObjectNameNotFound, () => client.ReadAllBytesAsync("original.bin", ct), "SMB error on RDMA");
+                    Check.Bytes(data, await client.ReadAllBytesAsync("renamed.bin", ct), "protected file READ after SMB error");
+                    using (var stored = store.OpenFile("renamed.bin", FileMode.Open, FileAccess.Read, FileShare.Read, writeThrough: false))
+                    {
+                        var actual = new byte[data.Length];
+                        Check.Equal(data.Length, await stored.ReadAsync(actual, 0, ct), "provider received full WRITE");
+                        Check.Bytes(data, actual, "provider contents match independent input");
+                    }
+                    await client.DeleteAsync("renamed.bin", ct: ct);
+                }
+                await serving.WaitAsync(ct);
+            }
+            finally
+            {
+                shutdown.Cancel();
+                try { await serving; } catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
+            }
+        }
+        Console.WriteLine("PASS SMB Direct authenticated file sessions, signing, encryption policy and logoff");
     }
 }

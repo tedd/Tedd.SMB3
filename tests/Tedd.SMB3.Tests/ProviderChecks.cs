@@ -120,7 +120,7 @@ internal static class ProviderChecks
         throw new Exception($"Expected SMB status {status:X8}.");
     }
 
-    private sealed class MemoryProvider : ISmbShareProvider
+    internal sealed class MemoryProvider : ISmbShareProvider
     {
         private sealed class Node(ulong id, bool directory)
         {

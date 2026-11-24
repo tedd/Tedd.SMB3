@@ -23,10 +23,15 @@ if ($NetworkDirect) {
     }
     if (!$cmake) { throw 'Install CMake 3.24 or later and Visual Studio with the Desktop development with C++ workload.' }
     $native = Join-Path $Workspace 'networkdirect'
-    & $cmake -S (Join-Path $PSScriptRoot 'src/native/networkdirect') -B $native -A x64
+    $buildTesting = if ($SkipTests) { 'OFF' } else { 'ON' }
+    & $cmake -S (Join-Path $PSScriptRoot 'src/native/networkdirect') -B $native -A x64 "-DBUILD_TESTING=$buildTesting"
     if ($LASTEXITCODE -ne 0) { throw 'Network Direct configuration failed.' }
     & $cmake --build $native --config Release
     if ($LASTEXITCODE -ne 0) { throw 'Network Direct compilation failed.' }
+    if (!$SkipTests) {
+        & (Join-Path (Split-Path $cmake) 'ctest.exe') --test-dir $native -C Release --output-on-failure --no-tests=error
+        if ($LASTEXITCODE -ne 0) { throw 'Network Direct completion tests failed.' }
+    }
     foreach ($project in 'Tedd.SMB3','Tedd.SMB3.Host','Tedd.SMB3.Tests') {
         Copy-Item -LiteralPath (Join-Path $native 'Release/Tedd.SMB3.NetworkDirect.dll') -Destination (Join-Path $artifacts "bin/$project/release")
     }

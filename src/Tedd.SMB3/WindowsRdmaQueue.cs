@@ -90,7 +90,7 @@ internal sealed class WindowsRdmaQueue(WindowsRdmaQueue.ConnectionHandle handle,
 
     internal Task FinishAcceptAsync(CancellationToken ct) => Task.Run(() => Check(smbd_finish_accept(handle, ct.WaitHandle.SafeWaitHandle), ct), ct);
 
-    internal static async Task<WindowsRdmaQueue> ConnectAsync(string host, int port, CancellationToken ct)
+    internal static async Task<IRdmaQueue> ConnectAsync(string host, int port, CancellationToken ct)
     {
         var addresses = await Dns.GetHostAddressesAsync(host, ct).ConfigureAwait(false);
         IOException? last = null;

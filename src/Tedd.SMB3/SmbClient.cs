@@ -14,6 +14,7 @@ public sealed record SmbClientOptions
     public int Port { get; init; } = SmbLimits.DefaultPort;
     /// <summary>Connect over Windows x64 Network Direct v2 (RoCE), carrying SMB messages in-band.</summary>
     public bool UseSmbDirect { get; init; }
+    internal Func<string, int, CancellationToken, Task<IRdmaQueue>> OpenRdmaQueue { get; init; } = WindowsRdmaQueue.ConnectAsync;
     /// <summary>Requests encryption; a peer may additionally require it at session or share level.</summary>
     public bool Encrypt { get; init; } = true;
     public bool EnableCompression { get; init; } = true;
@@ -77,7 +78,7 @@ public sealed class SmbClient : IAsyncDisposable
         ct = timeout.Token;
         if (options.UseSmbDirect)
         {
-            var queue = await WindowsRdmaQueue.ConnectAsync(host, options.Port, ct).ConfigureAwait(false);
+            var queue = await options.OpenRdmaQueue(host, options.Port, ct).ConfigureAwait(false);
             channel = queue;
             transport = await SmbDirectTransport.NegotiateAsync(queue, server: false, ct).ConfigureAwait(false);
         }
