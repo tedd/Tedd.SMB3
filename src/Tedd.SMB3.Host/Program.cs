@@ -4,7 +4,7 @@ using Tedd.SMB3;
 // Keep hosting policy separate from the library; the password is read from the process environment.
 if (args.Length == 0 || args[0] != "serve")
 {
-    Console.Error.WriteLine("Usage: Tedd.SMB3.Host serve --root PATH [--share files] [--user smbtest] [--bind 127.0.0.1] [--port 445] [--writable] [--allow-unencrypted]\nNTLM: set TEDD_SMB_PASSWORD. Kerberos: --kerberos-principal cifs/hostname@REALM --user allowed-principal [--keytab PATH on Linux].");
+    Console.Error.WriteLine("Usage: Tedd.SMB3.Host serve --root PATH [--share files] [--user smbtest] [--bind 127.0.0.1] [--port 445] [--smb-direct] [--writable] [--allow-unencrypted]\nNTLM: set TEDD_SMB_PASSWORD. Kerberos: --kerberos-principal cifs/hostname@REALM --user allowed-principal [--keytab PATH on Linux].");
     return 2;
 }
 
@@ -35,6 +35,7 @@ await using var server = new SmbServer(new()
     }],
     AuthenticationProvider = authentication, UserName = user, Password = password,
     ListenAddress = IPAddress.Parse(Get("--bind", "127.0.0.1")), Port = int.Parse(Get("--port", "445")),
+    UseSmbDirect = args.Contains("--smb-direct"),
     RequireEncryption = !args.Contains("--allow-unencrypted"), Log = Console.WriteLine
 });
 await server.RunAsync(stop.Token).ConfigureAwait(false);

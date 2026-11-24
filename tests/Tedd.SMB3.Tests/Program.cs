@@ -3,6 +3,9 @@ using System.Security.Cryptography;
 using System.Text;
 using Tedd.SMB3;
 
+if (args is ["bulk", ..]) { await BulkTransferChecks.RunAsync(args); return; }
+if (args is ["smb-direct"]) { await SmbDirectChecks.RunAsync(); return; }
+
 // Performance mode executes no file, network, or account mutations.
 if (args is ["perf"]) { PerformanceChecks.Run(); return; }
 if (args is ["perf", var operation, var size]) { PerformanceChecks.Run(operation, int.Parse(size)); return; }
@@ -55,6 +58,7 @@ Hex("08000400000000000100010000000000", contexts[64..80], "SMB3 signing context 
 Hex("02000600000000000200020001000000", Negotiation.Contexts(offerBoth: true)[48..64], "SMB3 cipher-list wire fixture");
 Hex("4E544C4D5353500001000000358208E2000000000000000000000000000000000A0000000000000F",
     Ntlm.Negotiate(), "NTLM negotiate wire fixture");
+await SmbDirectChecks.RunAsync();
 await ProtocolChecks.RunAsync(root);
 await AllocationRefactorChecks.RunAsync(root);
 await DirectoryNameChecks.RunAsync(root);

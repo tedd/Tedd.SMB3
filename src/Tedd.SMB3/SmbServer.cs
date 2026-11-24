@@ -17,6 +17,8 @@ public sealed record SmbServerOptions
     public ISmbAuthenticationProvider? AuthenticationProvider { get; init; }
     public IPAddress ListenAddress { get; init; } = IPAddress.Loopback;
     public int Port { get; init; } = SmbLimits.DefaultPort;
+    /// <summary>Listen on a Windows x64 Network Direct v2 (RoCE) adapter for in-band SMB messages.</summary>
+    public bool UseSmbDirect { get; init; }
     public bool Writable { get; init; }
     public bool RequireEncryption { get; init; } = true;
     public bool EnableCompression { get; init; } = true;
@@ -36,12 +38,13 @@ public sealed class SmbServer : IAsyncDisposable
     internal readonly SemaphoreSlim FileGate = new(1, 1);
     internal readonly List<OpenFile> OpenFiles = [];
     internal readonly byte[] GuidBytes = Guid.NewGuid().ToByteArray();
-    private readonly TcpListener listener;
+    private readonly TcpListener? listener;
+    private IPEndPoint? rdmaEndPoint;
     private readonly CancellationTokenSource stop = new();
     private readonly ConcurrentDictionary<long, Task> workers = new();
     private long workerId;
     private bool started;
-    public IPEndPoint LocalEndPoint => (IPEndPoint)listener.LocalEndpoint;
+    public IPEndPoint LocalEndPoint => rdmaEndPoint ?? (IPEndPoint?)listener?.LocalEndpoint ?? new(Options.ListenAddress, Options.Port);
 
     public SmbServer(SmbServerOptions options)
     {
@@ -74,7 +77,7 @@ public sealed class SmbServer : IAsyncDisposable
         Shares = registry;
         ShareNames = registry.Keys.ToArray();
         Options = options with { Shares = shares };
-        listener = new TcpListener(options.ListenAddress, options.Port);
+        if (!options.UseSmbDirect) listener = new TcpListener(options.ListenAddress, options.Port);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -84,13 +87,18 @@ public sealed class SmbServer : IAsyncDisposable
             throw new InvalidOperationException("Server already started.");
         started = true;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, cancellationToken);
-        listener.Start();
+        using var rdmaListener = Options.UseSmbDirect
+            ? WindowsRdmaQueue.Listen(new(Options.ListenAddress, Options.Port), Options.MaxConnections, out rdmaEndPoint)
+            : null;
+        listener?.Start();
         Options.Log?.Invoke($"Listening on {LocalEndPoint}; shares {string.Join(", ", ShareNames)}; SMB 3.1.1; encryption required={Options.RequireEncryption}.");
         try
         {
             while (!linked.IsCancellationRequested)
             {
-                var client = await listener.AcceptTcpClientAsync(linked.Token).ConfigureAwait(false);
+                IDisposable client = rdmaListener != null
+                    ? await WindowsRdmaQueue.AcceptAsync(rdmaListener, linked.Token).ConfigureAwait(false)
+                    : await listener!.AcceptTcpClientAsync(linked.Token).ConfigureAwait(false);
                 if (workers.Count >= Options.MaxConnections)
                 {
                     client.Dispose();
@@ -112,20 +120,33 @@ public sealed class SmbServer : IAsyncDisposable
         finally
         {
             linked.Cancel();
-            listener.Stop();
+            listener?.Stop();
             await Task.WhenAll(workers.Values).ConfigureAwait(false);
         }
     }
 
-    private async Task ServeAsync(TcpClient client, CancellationToken ct)
+    private async Task ServeAsync(IDisposable client, CancellationToken ct)
     {
         using (client)
         await using (var connection = new ServerConnection(this))
         {
             try
             {
-                client.NoDelay = true;
-                var transport = new SmbTransport(client.GetStream());
+                ISmbTransport transport;
+                if (client is WindowsRdmaQueue queue)
+                {
+                    using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    deadline.CancelAfter(TimeSpan.FromSeconds(5));
+                    await queue.FinishAcceptAsync(deadline.Token).ConfigureAwait(false);
+                    transport = await SmbDirectTransport.NegotiateAsync(queue, server: true, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    var tcp = (TcpClient)client;
+                    tcp.NoDelay = true;
+                    transport = new SmbTransport(tcp.GetStream());
+                }
+                await using var direct = transport as SmbDirectTransport;
                 while (!ct.IsCancellationRequested)
                 {
                     using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -148,7 +169,7 @@ public sealed class SmbServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await stop.CancelAsync().ConfigureAwait(false);
-        listener.Stop();
+        listener?.Stop();
         await Task.WhenAll(workers.Values).ConfigureAwait(false);
         stop.Dispose();
     }
@@ -388,7 +409,7 @@ internal sealed class ServerConnection : IAsyncDisposable
         var algorithms = Negotiation.ValidateContexts(request, offset, Wire.ReadUInt16LittleEndian(request, Smb3Header.Size + Smb3NegotiateRequest.NegotiateContextCountOffset), false);
         bool signing = algorithms.Signing;
         cipher = algorithms.Cipher;
-        compression = server.Options.EnableCompression && algorithms.Compression;
+        compression = server.Options.EnableCompression && !server.Options.UseSmbDirect && algorithms.Compression;
         int ctxOffset = Wire.Align(Smb3Header.Size + Smb3NegotiateResponse.FixedSize + server.AuthenticationToken.Length);
         var b = new byte[ctxOffset - Smb3Header.Size];
         Wire.WriteUInt16LittleEndian(b, 0, Smb3NegotiateResponse.StructureSize);

@@ -1,0 +1,117 @@
+{
+  "platform": "Windows x64, .NET 10.0.15, Release",
+  "scope": "Managed receive-buffer assembly. No RDMA device, sockets, filesystem, SMB encryption or storage in the timed region.",
+  "workload": "64 MiB of deterministic input split into 1024 messages of 64 KiB. Each fragment carries up to 16360 data bytes. Both arms use the production fragment reassembler. The staged baseline first copies each fragment into a reusable buffer.",
+  "inputSha256": "60AEDB926950A0F57B7D3CF9278063886654A83106B2457E249CFB17AE1CE563",
+  "design": "16 independent randomized fresh-process pairs, seed 54191, 2 warmup batches and 8 operations per measured batch. Each process verifies every payload byte during setup and a checksum of packet tails after measurement.",
+  "candidateTimeRatio": 0.845754,
+  "ratio95PercentInterval": [
+    0.824467,
+    0.867589
+  ],
+  "comparisonId": "cmp-2ffe54180dc978091137c7b7a51effe17ed3aa1846e89190895b4a702026664a",
+  "pairColumns": [
+    "block",
+    "firstArm",
+    "stagedNanosecondsPerOperation",
+    "borrowedNanosecondsPerOperation"
+  ],
+  "pairs": [
+    [
+      0,
+      "baseline",
+      10350262.5,
+      8744937.5
+    ],
+    [
+      1,
+      "baseline",
+      11029312.5,
+      8650050
+    ],
+    [
+      2,
+      "baseline",
+      10416625,
+      8622250
+    ],
+    [
+      3,
+      "candidate",
+      10566775,
+      8471662.5
+    ],
+    [
+      4,
+      "baseline",
+      10711862.5,
+      9200575
+    ],
+    [
+      5,
+      "candidate",
+      10314987.5,
+      8763225
+    ],
+    [
+      6,
+      "candidate",
+      10719800,
+      8802112.5
+    ],
+    [
+      7,
+      "candidate",
+      11022812.5,
+      9106737.5
+    ],
+    [
+      8,
+      "baseline",
+      10173250,
+      8342725
+    ],
+    [
+      9,
+      "baseline",
+      10083187.5,
+      9578312.5
+    ],
+    [
+      10,
+      "candidate",
+      10180162.5,
+      8509487.5
+    ],
+    [
+      11,
+      "candidate",
+      10631025,
+      8617325
+    ],
+    [
+      12,
+      "baseline",
+      10420025,
+      9359425
+    ],
+    [
+      13,
+      "candidate",
+      11202262.5,
+      9780462.5
+    ],
+    [
+      14,
+      "candidate",
+      10802900,
+      9244637.5
+    ],
+    [
+      15,
+      "candidate",
+      10596037.5,
+      9418125
+    ]
+  ]
+}

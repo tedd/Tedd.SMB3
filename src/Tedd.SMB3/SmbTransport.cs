@@ -3,12 +3,18 @@ using System.Net.Sockets;
 
 namespace Tedd.SMB3;
 
+internal interface ISmbTransport
+{
+    ValueTask<byte[]> ReceiveAsync(CancellationToken cancellationToken);
+    ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken);
+}
+
 /// <summary>Direct TCP framing with one reusable receive header per connection.</summary>
 /// <remarks>The owner serializes sends and receives and owns the network stream.</remarks>
-internal sealed class SmbTransport(NetworkStream stream)
+internal sealed class SmbTransport(NetworkStream stream) : ISmbTransport
 {
     private readonly byte[] receiveHeader = new byte[DirectTcpTransport.HeaderSize];
-    internal async ValueTask<byte[]> ReceiveAsync(CancellationToken cancellationToken)
+    public async ValueTask<byte[]> ReceiveAsync(CancellationToken cancellationToken)
     {
         await stream.ReadExactlyAsync(receiveHeader, cancellationToken).ConfigureAwait(false);
         int length = (receiveHeader[1] << 16) | (receiveHeader[2] << 8) | receiveHeader[3];
@@ -20,7 +26,7 @@ internal sealed class SmbTransport(NetworkStream stream)
         return packet;
     }
 
-    internal async ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    public async ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         if (payload.Length > SmbLimits.MaxFrameSize)
             throw new SmbException(NtStatus.InvalidParameter);

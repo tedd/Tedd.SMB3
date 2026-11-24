@@ -12,6 +12,8 @@ public sealed record SmbClientOptions
     public required string Password { get; init; }
     public string Domain { get; init; } = "WORKGROUP";
     public int Port { get; init; } = SmbLimits.DefaultPort;
+    /// <summary>Connect over Windows x64 Network Direct v2 (RoCE), carrying SMB messages in-band.</summary>
+    public bool UseSmbDirect { get; init; }
     /// <summary>Requests encryption; a peer may additionally require it at session or share level.</summary>
     public bool Encrypt { get; init; } = true;
     public bool EnableCompression { get; init; } = true;
@@ -29,13 +31,13 @@ public sealed record SmbEntry(string Name, long Length, FileAttributes Attribute
 /// <summary>A single-session SMB 3.1.1 client. Requests on a connection are serialized.</summary>
 public sealed class SmbClient : IAsyncDisposable
 {
-    private readonly TcpClient tcp = new();
+    private IDisposable? channel;
     // A complete request/reply owns the channel, message credits and crypto providers.
     private readonly SemaphoreSlim gate = new(1);
     private readonly SmbClientOptions options;
     private bool compression;
     public bool IsCompressionEnabled => compression;
-    private SmbTransport transport = null!;
+    private ISmbTransport transport = null!;
     private SessionCrypto? crypto;
     private ulong message;
     private ulong session;
@@ -47,7 +49,7 @@ public sealed class SmbClient : IAsyncDisposable
     public string Dialect => "3.1.1";
     public bool IsEncrypted => encrypted;
 
-    private SmbClient(SmbClientOptions options) => this.options = options;
+    private SmbClient(SmbClientOptions options) => this.options = options.UseSmbDirect ? options with { EnableCompression = false } : options;
     /// <summary>Negotiates SMB 3.1.1, authenticates with NTLMv2, and connects a disk share.</summary>
     public static async Task<SmbClient> ConnectAsync(string host, string share, SmbClientOptions options, CancellationToken ct = default)
     {
@@ -73,9 +75,20 @@ public sealed class SmbClient : IAsyncDisposable
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(options.RequestTimeout);
         ct = timeout.Token;
-        await tcp.ConnectAsync(host, options.Port, ct).ConfigureAwait(false);
-        tcp.NoDelay = true;
-        transport = new SmbTransport(tcp.GetStream());
+        if (options.UseSmbDirect)
+        {
+            var queue = await WindowsRdmaQueue.ConnectAsync(host, options.Port, ct).ConfigureAwait(false);
+            channel = queue;
+            transport = await SmbDirectTransport.NegotiateAsync(queue, server: false, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            var tcp = new TcpClient();
+            channel = tcp;
+            await tcp.ConnectAsync(host, options.Port, ct).ConfigureAwait(false);
+            tcp.NoDelay = true;
+            transport = new SmbTransport(tcp.GetStream());
+        }
         var body = new byte[Wire.Align(Smb3NegotiateRequest.FixedSize + sizeof(ushort))];
         Wire.WriteUInt16LittleEndian(body, 0, Smb3NegotiateRequest.StructureSize);
         Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.DialectCountOffset, 1);
@@ -209,10 +222,11 @@ public sealed class SmbClient : IAsyncDisposable
         }
         // An interrupted or untrusted exchange leaves framing/credits indeterminate.
         // Abort the transport so queued callers cannot reuse that channel state.
-        catch (Exception e) when (e is OperationCanceledException or EndOfStreamException or CryptographicException or SocketException || e is SmbException && !responseTrusted)
+        catch (Exception e) when (e is OperationCanceledException or CryptographicException or SocketException || e is IOException && !responseTrusted)
         {
             failed = true;
-            tcp.Dispose();
+            if (transport is SmbDirectTransport direct) direct.Abort();
+            else channel?.Dispose();
             throw;
         }
         finally
@@ -467,7 +481,7 @@ public sealed class SmbClient : IAsyncDisposable
             return;
         try
         {
-            if (crypto != null && !failed && tcp.Connected)
+            if (crypto != null && !failed && channel != null)
             {
                 try
                 {
@@ -485,7 +499,8 @@ public sealed class SmbClient : IAsyncDisposable
         {
             disposed = true;
             crypto?.Dispose();
-            tcp.Dispose();
+            if (transport is SmbDirectTransport direct) await direct.DisposeAsync().ConfigureAwait(false);
+            channel?.Dispose();
             gate.Dispose();
         }
     }

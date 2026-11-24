@@ -58,6 +58,41 @@ The script places generated files, caches and test fixtures in the designated
 workspace. Library and host outputs are under `artifacts\bin` there. It does not
 install a service or change system SMB policies.
 
+## SMB Direct over RoCE (Windows x64, experimental)
+
+The client and server can carry signed or encrypted SMB messages over a reliable
+RDMA queue pair using Windows Network Direct v2. Each connection registers its
+send and receive buffers once. MS-SMBD negotiates message sizes and credits and
+fragments larger SMB messages across RDMA SENDs. File data travels in-band.
+One-sided RDMA READ/WRITE, RDMA crypto transforms, multichannel discovery, and
+iWARP port mapping are unsupported. The 64 KiB SMB file I/O limit also applies
+to this transport. Hardware interoperability and wire throughput are unverified.
+
+Install a RoCE adapter and its user-mode Network Direct v2 provider on each
+endpoint. Build the optional native DLL with PowerShell 7, the Visual Studio C++
+desktop workload, and CMake 3.24 or later.
+
+```powershell
+.\build.ps1 -Workspace D:\Workspaces\AI\tedd-smb3-build -NetworkDirect
+```
+
+The build copies `Tedd.SMB3.NetworkDirect.dll` beside the library, host, and
+test executable. Deploy that DLL beside the managed application. Set
+`SmbClientOptions.UseSmbDirect` and `SmbServerOptions.UseSmbDirect` to `true`,
+or pass `--smb-direct` to the server host. Bind to the adapter's IP address. Both
+peers must use the same RDMA port (default 445). Selecting RDMA requires the
+provider to establish the connection. TCP remains the default.
+
+To measure aggregate encrypted file throughput, use a dedicated writable test
+share and set `TEDD_SMB_USER` and `TEDD_SMB_PASSWORD` on the test client. This
+example transfers eight 256 MiB files across four sessions, reports reads and
+writes separately in decimal GB/s, verifies contents, and removes its files.
+The write interval ends at file close and excludes an explicit durable flush.
+
+```powershell
+dotnet D:\Workspaces\AI\tedd-smb3-build\artifacts\bin\Tedd.SMB3.Tests\release\Tedd.SMB3.Tests.dll bulk rdma <server-ip> 445 files 4 2 256
+```
+
 ## Run the server
 
 Create the export first and supply the account password through the process
