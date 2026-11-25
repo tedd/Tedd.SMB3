@@ -17,6 +17,8 @@ public sealed record SmbServerOptions
     public ISmbAuthenticationProvider? AuthenticationProvider { get; init; }
     public IPAddress ListenAddress { get; init; } = IPAddress.Loopback;
     public int Port { get; init; } = SmbLimits.DefaultPort;
+    /// <summary>Allow the server to start without disk shares while waiting for registration.</summary>
+    public bool AllowEmptyShares { get; init; }
     /// <summary>Listen on a RoCE adapter using the platform's native SMB Direct provider.</summary>
     public bool UseSmbDirect { get; init; }
     public bool Writable { get; init; }
@@ -32,8 +34,10 @@ public sealed class SmbServer : IAsyncDisposable
     internal readonly SmbServerOptions Options;
     internal readonly ISmbAuthenticationProvider Authentication;
     internal readonly byte[] AuthenticationToken;
-    internal readonly IReadOnlyDictionary<string, SmbShare> Shares;
-    internal readonly string[] ShareNames;
+    private volatile Dictionary<string, SmbShare> shares;
+    internal IReadOnlyDictionary<string, SmbShare> Shares => shares;
+    internal string[] ShareNamesFor(string principal) => shares.Values
+        .Where(s => s.Authorize?.Invoke(principal) != false).Select(s => s.Name).ToArray();
     // One async gate preserves share-access, rename and delete-on-close atomicity.
     internal readonly SemaphoreSlim FileGate = new(1, 1);
     internal readonly List<OpenFile> OpenFiles = [];
@@ -54,30 +58,66 @@ public sealed class SmbServer : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(options));
         if (options.RootPath != null && options.Shares.Count != 0)
             throw new ArgumentException("Configure RootPath or Shares, not both.", nameof(options));
-        var shares = options.RootPath != null
+        var configured = options.RootPath != null
             ? [new SmbShare(options.ShareName, SmbDirectoryProvider.Create(options.RootPath)) { Writable = options.Writable }]
             : options.Shares.ToArray();
-        if (shares.Length is < 1 or > 256)
-            throw new ArgumentException("Configure between one and 256 shares.", nameof(options));
-        var registry = new Dictionary<string, SmbShare>(StringComparer.OrdinalIgnoreCase);
-        foreach (var share in shares)
-        {
-            if (share == null || share.Provider == null || string.IsNullOrWhiteSpace(share.Name) || share.Name.Length > 80 ||
-                share.Name.Any(c => c < 32 || "\\/:*?\"<>|".Contains(c)) || share.Name is "." or ".." ||
-                share.Name.EndsWith(' ') || share.Name.EndsWith('.') || share.Name.Equals("IPC$", StringComparison.OrdinalIgnoreCase) ||
-                !registry.TryAdd(share.Name, share))
-                throw new ArgumentException("Invalid or duplicate share configuration.", nameof(options));
-        }
-        if (options.AuthenticationProvider != null && shares.Any(x => x.Authorize == null))
-            throw new ArgumentException("External authentication requires an explicit authorizer for every share.", nameof(options));
+        if (configured.Length == 0 && !options.AllowEmptyShares)
+            throw new ArgumentException("Configure at least one share.", nameof(options));
+        Options = options with { Shares = configured };
+        shares = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var share in configured) Register(shares, share);
         Authentication = options.AuthenticationProvider ?? new NtlmAuthentication(options.UserName, options.Password);
         AuthenticationToken = Authentication.NegotiateToken.ToArray();
         if (AuthenticationToken.Length > SmbLimits.MaxAuthenticationTokenSize)
             throw new ArgumentException("Authentication token exceeds the protocol limit.", nameof(options));
-        Shares = registry;
-        ShareNames = registry.Keys.ToArray();
-        Options = options with { Shares = shares };
         if (!options.UseSmbDirect) listener = new TcpListener(options.ListenAddress, options.Port);
+    }
+
+    private void Register(Dictionary<string, SmbShare> registry, SmbShare share)
+    {
+        if (share == null || share.Provider == null || string.IsNullOrWhiteSpace(share.Name) || share.Name.Length > 80 ||
+            share.Name.Any(c => c < 32 || "\\/:*?\"<>|".Contains(c)) || share.Name is "." or ".." ||
+            share.Name.EndsWith(' ') || share.Name.EndsWith('.') || share.Name.Equals("IPC$", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Invalid share configuration.", nameof(share));
+        if (Options.AuthenticationProvider != null && share.Authorize == null)
+            throw new ArgumentException("External authentication requires an explicit share authorizer.", nameof(share));
+        // Each registration identifies one lifetime, even when the caller reuses its share descriptor.
+        if (registry.Count >= 256 || !registry.TryAdd(share.Name, share with { }))
+            throw new ArgumentException("Too many shares or duplicate share name.", nameof(share));
+    }
+
+    public async Task AddShareAsync(SmbShare share, CancellationToken ct = default)
+    {
+        await FileGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var next = new Dictionary<string, SmbShare>(shares, StringComparer.OrdinalIgnoreCase);
+            Register(next, share);
+            shares = next;
+        }
+        finally { FileGate.Release(); }
+    }
+
+    /// <summary>Revoke this share's trees and close its handles, honoring pending deletes at the last close.</summary>
+    /// <remarks>Other registrations, including aliases of the same provider, retain their handles.
+    /// Cleanup errors are reported together after every handle has been removed from the server.</remarks>
+    public async Task RemoveShareAsync(string name, CancellationToken ct = default)
+    {
+        await FileGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var next = new Dictionary<string, SmbShare>(shares, StringComparer.OrdinalIgnoreCase);
+            if (!next.Remove(name, out var share)) return;
+            shares = next;
+            List<Exception>? errors = null;
+            foreach (var handle in OpenFiles.Where(h => ReferenceEquals(h.OpenedShare, share)).ToArray())
+            {
+                try { handle.Owner!.Remove(handle); }
+                catch (Exception error) { (errors ??= []).Add(error); }
+            }
+            if (errors != null) throw new AggregateException("Share removed with handle cleanup errors.", errors);
+        }
+        finally { FileGate.Release(); }
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -91,7 +131,7 @@ public sealed class SmbServer : IAsyncDisposable
             ? RdmaProvider.Listen(new(Options.ListenAddress, Options.Port), Options.MaxConnections, out rdmaEndPoint)
             : null;
         listener?.Start();
-        Options.Log?.Invoke($"Listening on {LocalEndPoint}; shares {string.Join(", ", ShareNames)}; SMB 3.1.1; encryption required={Options.RequireEncryption}.");
+        Options.Log?.Invoke($"Listening on {LocalEndPoint}; shares {string.Join(", ", Shares.Keys)}; SMB 3.1.1; encryption required={Options.RequireEncryption}.");
         try
         {
             while (!linked.IsCancellationRequested)
@@ -472,6 +512,7 @@ internal sealed class ServerConnection : IAsyncDisposable
                 if (key.Length != 16 || string.IsNullOrWhiteSpace(step.Principal)) throw new SmbException(NtStatus.LogonFailure);
                 crypto = new SessionCrypto(key, preauth, true, cipher);
                 principal = step.Principal;
+                files.Principal = principal;
             }
             finally { CryptographicOperations.ZeroMemory(key); }
             status = NtStatus.Success;
@@ -507,7 +548,7 @@ internal sealed class ServerConnection : IAsyncDisposable
         Wire.WriteUInt16LittleEndian(b, 0, Smb3TreeConnectResponse.StructureSize);
         b[Smb3TreeConnectResponse.ShareTypeOffset] = pipe ? Smb3ShareType.Pipe : Smb3ShareType.Disk;
         Wire.WriteUInt32LittleEndian(b, Smb3TreeConnectResponse.ShareFlagsOffset, Smb3ShareFlags.NoCaching | (server.Options.RequireEncryption ? Smb3ShareFlags.EncryptData : 0));
-        Wire.WriteUInt32LittleEndian(b, Smb3TreeConnectResponse.MaximalAccessOffset, pipe || share?.Writable == true ? FileAccessMask.FileAllAccess : SmbLimits.ReadAccess);
+        Wire.WriteUInt32LittleEndian(b, Smb3TreeConnectResponse.MaximalAccessOffset, pipe || share!.MayWrite(principal) ? FileAccessMask.FileAllAccess : SmbLimits.ReadAccess);
         return b;
     }
 

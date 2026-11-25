@@ -174,18 +174,11 @@ internal static class Ntlm
 }
 
 /// <summary>One NTLMv2 challenge exchange bound to a configured local account.</summary>
-internal sealed class NtlmServer
+internal sealed class NtlmServer(IReadOnlyDictionary<string, (string Name, string Password)> accounts)
 {
-    private readonly string user;
-    private readonly string password;
     private byte[] negotiate = [];
     private byte[] challenge = [];
     private bool used;
-    internal NtlmServer(string user, string password)
-    {
-        this.user = user;
-        this.password = password;
-    }
 
     internal byte[] Challenge(byte[] token)
     {
@@ -211,7 +204,7 @@ internal sealed class NtlmServer
         return challenge;
     }
 
-    internal byte[] Authenticate(byte[] token)
+    internal (byte[] Key, string Principal) Authenticate(byte[] token)
     {
         if (used || challenge.Length == 0 || token.Length < NtlmAuthenticateMessage.FixedSize || Wire.ReadUInt32LittleEndian(token, NtlmMessage.MessageTypeOffset) != NtlmMessageType.Authenticate)
             throw new SmbException(NtStatus.LogonFailure);
@@ -222,7 +215,7 @@ internal sealed class NtlmServer
         var domain = Ntlm.ReadSecurityBuffer(token, NtlmAuthenticateMessage.DomainNameFieldsOffset, micAt);
         var username = Ntlm.ReadSecurityBuffer(token, NtlmAuthenticateMessage.UserNameFieldsOffset, micAt);
         var enc = Ntlm.ReadSecurityBuffer(token, NtlmAuthenticateMessage.EncryptedRandomSessionKeyFieldsOffset, micAt);
-        if (!Wire.Text(username).Equals(user, StringComparison.OrdinalIgnoreCase) || nt.Length < NtlmV2Response.MinimumSize || nt[NtlmV2Response.ResponseTypeOffset] != NtlmV2Response.ResponseVersion || nt[NtlmV2Response.HiResponseTypeOffset] != NtlmV2Response.ResponseVersion || Wire.ReadUInt16LittleEndian(nt, NtlmV2Response.Reserved1Offset) != 0 || Wire.ReadUInt32LittleEndian(nt, NtlmV2Response.Reserved2Offset) != 0 || Wire.ReadUInt32LittleEndian(nt, NtlmV2Response.Reserved3Offset) != 0)
+        if (!accounts.TryGetValue(Wire.Text(username), out var account) || nt.Length < NtlmV2Response.MinimumSize || nt[NtlmV2Response.ResponseTypeOffset] != NtlmV2Response.ResponseVersion || nt[NtlmV2Response.HiResponseTypeOffset] != NtlmV2Response.ResponseVersion || Wire.ReadUInt16LittleEndian(nt, NtlmV2Response.Reserved1Offset) != 0 || Wire.ReadUInt32LittleEndian(nt, NtlmV2Response.Reserved2Offset) != 0 || Wire.ReadUInt32LittleEndian(nt, NtlmV2Response.Reserved3Offset) != 0)
             throw new SmbException(NtStatus.LogonFailure);
         if ((flags & NtlmNegotiateFlags.AuthenticateConsistencyMask) != (Wire.ReadUInt32LittleEndian(challenge, NtlmChallengeMessage.NegotiateFlagsOffset) & NtlmNegotiateFlags.AuthenticateConsistencyMask))
             throw new SmbException(NtStatus.LogonFailure);
@@ -254,7 +247,7 @@ internal sealed class NtlmServer
 
         if (!ended)
             throw new SmbException(NtStatus.LogonFailure);
-        var responseKey = Ntlm.ResponseKey(user, password, Wire.Text(domain));
+        var responseKey = Ntlm.ResponseKey(account.Name, account.Password, Wire.Text(domain));
         try
         {
             var proof = HMACMD5.HashData(responseKey, Wire.Join(challenge[NtlmChallengeMessage.ServerChallengeOffset..(NtlmChallengeMessage.ServerChallengeOffset + NtlmMessage.ChallengeSize)], nt[NtlmV2Response.ProofSize..]));
@@ -285,7 +278,7 @@ internal sealed class NtlmServer
                 }
             }
 
-            return key;
+            return (key, account.Name);
         }
         finally
         {

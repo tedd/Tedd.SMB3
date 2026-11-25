@@ -260,13 +260,25 @@ public sealed class SmbKerberosAuthentication : ISmbAuthenticationProvider
     }
 }
 
-internal sealed class NtlmAuthentication(string userName, string password) : ISmbAuthenticationProvider
+/// <summary>NTLMv2 authentication against named service accounts.</summary>
+public sealed class NtlmAuthentication : ISmbAuthenticationProvider
 {
-    public ReadOnlyMemory<byte> NegotiateToken => Spnego.Initial;
-    public ISmbAuthenticationContext CreateContext() => new Context(userName, password);
-    private sealed class Context(string user, string password) : ISmbAuthenticationContext
+    private readonly Dictionary<string, (string Name, string Password)> accounts = new(StringComparer.OrdinalIgnoreCase);
+
+    public NtlmAuthentication(string userName, string password) : this(new Dictionary<string, string> { [userName] = password }) { }
+    public NtlmAuthentication(IReadOnlyDictionary<string, string> passwords)
     {
-        private readonly NtlmServer server = new(user, password);
+        ArgumentNullException.ThrowIfNull(passwords);
+        foreach (var (name, password) in passwords)
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrEmpty(password) || !accounts.TryAdd(name, (name, password)))
+                throw new ArgumentException("Invalid or duplicate NTLM account.", nameof(passwords));
+        if (accounts.Count == 0) throw new ArgumentException("Supply at least one NTLM account.", nameof(passwords));
+    }
+
+    public ReadOnlyMemory<byte> NegotiateToken => Spnego.Initial;
+    public ISmbAuthenticationContext CreateContext() => new Context(new NtlmServer(accounts));
+    private sealed class Context(NtlmServer server) : ISmbAuthenticationContext
+    {
         private bool challenged, raw, complete;
         public SmbAuthenticationStep Accept(ReadOnlySpan<byte> token)
         {
@@ -279,9 +291,9 @@ internal sealed class NtlmAuthentication(string userName, string password) : ISm
                 challenged = true;
                 return new(raw ? challenge : Spnego.Response(challenge, true), null);
             }
-            var key = server.Authenticate(input);
+            var (key, principal) = server.Authenticate(input);
             complete = true;
-            return new(raw ? [] : Spnego.Response([], false), key, user);
+            return new(raw ? [] : Spnego.Response([], false), key, principal);
         }
         public void Dispose() { }
     }

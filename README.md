@@ -212,13 +212,24 @@ with a read-only directory. `SmbDirectoryProvider.Create` selects
 `RootPath`, `ShareName`, and `Writable` remain a shorthand for one directory share;
 configure either `RootPath` or `Shares`.
 
+For multiple local accounts, supply `new NtlmAuthentication(passwords)` as
+`AuthenticationProvider`, where `passwords` maps usernames to passwords.
+Set each share's `Authorize` predicate to grant visibility and read access.
+A writable share can also use `AuthorizeWrite` to restrict mutations to a
+subset of its authorized users.
+
+Use `AddShareAsync` and `RemoveShareAsync` to change exports on a running
+server. Set `AllowEmptyShares` to start the listener before any exports are
+available. Removing a share revokes its trees and closes its open files.
+Clients must reconnect to a replacement share with the same name.
+
 Implement `ISmbShareProvider` for custom storage. All paths are share-relative,
 use `/` separators, and represent the root as an empty string. `ResolvePath`
 provides canonical names; object IDs and volume IDs must remain stable through
 renames. `ISmbFile` supplies offset-based asynchronous I/O, length changes and
 flush. Providers supply metadata, capacity, enumeration and namespace changes
 without exposing native handles. The application owns provider resources and
-must keep them alive until server shutdown. The server coordinates its own
+keeps them alive until their final share is removed or the server shuts down. The server coordinates its own
 opens; providers must enforce their backing store's containment and concurrency
 requirements. Reuse the same provider instance when exposing aliases of one store.
 

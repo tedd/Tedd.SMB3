@@ -6,6 +6,9 @@ public sealed record SmbShare(string Name, ISmbShareProvider Provider)
     public bool Writable { get; init; }
     /// <summary>Application authorization for an authenticated principal; required for external authentication.</summary>
     public Func<string, bool>? Authorize { get; init; }
+    /// <summary>Restrict a writable share to a subset of its authorized principals.</summary>
+    public Func<string, bool>? AuthorizeWrite { get; init; }
+    internal bool MayWrite(string principal) => Writable && AuthorizeWrite?.Invoke(principal) != false;
 }
 
 /// <summary>Storage for a share. Paths are canonical, slash-separated, share-relative names;

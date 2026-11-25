@@ -19,6 +19,8 @@ internal sealed class OpenFile : IDisposable
     internal string? DeletePath;
     internal ISmbFile? Stream;
     internal ISmbShareProvider? Provider;
+    internal SmbShare? OpenedShare;
+    internal FileService? Owner;
     internal IEnumerator<string>? Entries;
     internal string? EntryCurrent;
     internal int EntryIndex;
@@ -26,8 +28,8 @@ internal sealed class OpenFile : IDisposable
     internal readonly RpcService Endpoint = new();
     public void Dispose()
     {
-        Entries?.Dispose();
-        Stream?.Dispose();
+        try { Entries?.Dispose(); }
+        finally { Stream?.Dispose(); }
     }
 }
 
@@ -49,10 +51,12 @@ internal sealed class FileService : IAsyncDisposable
     internal byte[]? RelatedId;
     private SmbShare? currentShare;
     private ISmbShareProvider Provider => currentShare!.Provider;
-    private bool Writable => currentShare?.Writable == true;
+    internal string Principal { get; set; } = "";
+    private bool Writable => currentShare?.MayWrite(Principal) == true;
     private static SmbFileMetadata Metadata(OpenFile h) => h.Provider!.GetMetadata(h.Path) ?? throw new SmbException(NtStatus.ObjectNameNotFound);
     private string ResolvePath(string name) => Provider.ResolvePath(SmbPath.Normalize(name));
-    private string ObjectIdentity(string path) => Provider.Volume.Id.ToString("N") + ":" + Provider.GetMetadata(path)!.FileId.ToString("X16");
+    private static string? ObjectIdentity(ISmbShareProvider provider, string path) =>
+        provider.GetMetadata(path) is { } info ? provider.Volume.Id.ToString("N") + ":" + info.FileId.ToString("X16") : null;
     private static void WriteIdentity(byte[] b, int offset, ISmbShareProvider provider, string path) =>
         Wire.WriteUInt64LittleEndian(b, offset, (provider.GetMetadata(path) ?? throw new SmbException(NtStatus.ObjectNameNotFound)).FileId);
     private const uint ReadMask = SmbLimits.ReadSharingAccess;
@@ -64,6 +68,8 @@ internal sealed class FileService : IAsyncDisposable
         await server.FileGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (share != null && !ReferenceEquals(share, server.Shares.GetValueOrDefault(share.Name)))
+                throw new SmbException(NtStatus.BadNetworkName);
             currentShare = share;
             return cmd switch
             {
@@ -208,10 +214,10 @@ internal sealed class FileService : IAsyncDisposable
         string path = ResolvePath(name);
         var metadata = Provider.GetMetadata(path);
         bool exists = metadata != null, isDir = metadata?.IsDirectory == true;
-        string objectId = exists ? ObjectIdentity(path) : "";
-        if (server.OpenFiles.Any(x => !x.Pipe && x.ObjectId == objectId && objectId.Length != 0 && x.DeletePending))
+        string? objectId = exists ? ObjectIdentity(Provider, path) : null;
+        if (objectId != null && server.OpenFiles.Any(x => !x.Pipe && x.ObjectId == objectId && x.DeletePending))
             throw new SmbException(NtStatus.DeletePending);
-        foreach (var h in server.OpenFiles.Where(x => !x.Pipe && x.ObjectId == objectId && objectId.Length != 0))
+        foreach (var h in server.OpenFiles.Where(x => !x.Pipe && x.ObjectId == objectId))
         {
             if (((access & ReadMask) != 0 && (h.Share & FileShareAccess.Read) == 0) || ((access & WriteMask) != 0 && (h.Share & FileShareAccess.Write) == 0) || ((access & DeleteMask) != 0 && (h.Share & FileShareAccess.Delete) == 0) || ((h.Access & ReadMask) != 0 && (share & FileShareAccess.Read) == 0) || ((h.Access & WriteMask) != 0 && (share & FileShareAccess.Write) == 0) || ((h.Access & DeleteMask) != 0 && (share & FileShareAccess.Delete) == 0))
                 throw new SmbException(NtStatus.SharingViolation);
@@ -273,11 +279,13 @@ internal sealed class FileService : IAsyncDisposable
             Directory = isDir,
             Stream = stream,
             Provider = Provider,
+            OpenedShare = currentShare,
+            Owner = this,
             DeletePending = (options & Smb3CreateOptions.DeleteOnClose) != 0
         };
         try
         {
-            handle.ObjectId = ObjectIdentity(path);
+            handle.ObjectId = ObjectIdentity(Provider, path) ?? throw new SmbException(NtStatus.ObjectNameNotFound);
             if (handle.DeletePending)
             {
                 handle.DeletePath = path;
@@ -404,7 +412,7 @@ internal sealed class FileService : IAsyncDisposable
         return b;
     }
 
-    private void Remove(OpenFile h)
+    internal void Remove(OpenFile h)
     {
         // A pending delete follows the object until the last shared handle closes.
         handles.Remove(FileHandleId.Read(h.Id));
@@ -420,7 +428,7 @@ internal sealed class FileService : IAsyncDisposable
                     x.DeletePending = true;
                     x.DeletePath = deletePath;
                 }
-            else
+            else if (ObjectIdentity(h.Provider!, deletePath) == h.ObjectId)
                 h.Provider!.Delete(deletePath, h.Directory);
         }
     }
@@ -488,7 +496,7 @@ internal sealed class FileService : IAsyncDisposable
         {
             if (handle.Rpc.Length != 0)
                 throw new SmbException(NtStatus.PipeBusy);
-            handle.Rpc = handle.Endpoint.Feed(data.Span, server.ShareNames);
+            handle.Rpc = handle.Endpoint.Feed(data.Span, server.ShareNamesFor(Principal));
         }
         else
         {
@@ -533,7 +541,7 @@ internal sealed class FileService : IAsyncDisposable
         int o = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3IoctlRequest.InputOffsetFieldOffset)), n = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3IoctlRequest.InputCountOffset));
         if (h.Rpc.Length != 0)
             throw new SmbException(NtStatus.PipeBusy);
-        var data = h.Endpoint.Feed(Wire.Slice(r, o, n), server.ShareNames);
+        var data = h.Endpoint.Feed(Wire.Slice(r, o, n), server.ShareNamesFor(Principal));
         if (data.Length > Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3IoctlRequest.MaxOutputResponseOffset))
             throw new SmbException(NtStatus.BufferTooSmall);
         var b = new byte[Smb3IoctlResponse.FixedSize];

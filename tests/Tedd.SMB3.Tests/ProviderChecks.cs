@@ -4,6 +4,7 @@ internal static class ProviderChecks
 {
     internal static async Task RunAsync(string root)
     {
+        await DynamicShareRemoval();
         // This provider has no filesystem path, FileStream, or native handle.
         var memory = new MemoryProvider();
         var other = new MemoryProvider();
@@ -114,6 +115,54 @@ internal static class ProviderChecks
         finally { policyStop.Cancel(); await policyRun; }
     }
 
+    private static async Task DynamicShareRemoval()
+    {
+        var memory = new MemoryProvider();
+        var share = new SmbShare("files", memory) { Writable = true };
+        using var stop = new CancellationTokenSource();
+        await using var server = new SmbServer(new()
+        {
+            Shares = [share, new("alias", memory)], UserName = "user", Password = "password", Port = 0
+        });
+        var run = server.RunAsync(stop.Token);
+        try
+        {
+            SmbClientOptions credentials = new() { UserName = "user", Password = "password", Port = server.LocalEndPoint.Port };
+            await using var files = await SmbClient.ConnectAsync("127.0.0.1", "files", credentials);
+            await using var alias = await SmbClient.ConnectAsync("127.0.0.1", "alias", credentials);
+            var broken = await files.OpenAsync("broken", FileMode.Create, FileAccess.ReadWrite);
+            var pending = await files.OpenAsync("pending", FileMode.Create, FileAccess.ReadWrite);
+            var replaced = await files.OpenAsync("replaced", FileMode.Create, FileAccess.ReadWrite);
+            var last = await files.OpenAsync("last", FileMode.Create, FileAccess.ReadWrite);
+            await using var aliasHandle = await alias.OpenAsync("pending");
+            await files.DeleteAsync("pending");
+            await files.DeleteAsync("replaced");
+            await files.DeleteAsync("last");
+            memory.Delete("replaced", false);
+            using (memory.OpenFile("replaced", FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite, false)) { }
+            var closed = new List<string>();
+            memory.FileClosed = path =>
+            {
+                closed.Add(path);
+                if (path == "broken") throw new IOException("Injected provider close failure.");
+            };
+            try { await server.RemoveShareAsync("files"); throw new Exception("Expected provider close failure."); }
+            catch (AggregateException error) when (error.InnerExceptions.Count == 1 && error.InnerException is IOException) { }
+            if (closed.Count != 4 || memory.GetMetadata("pending") == null || memory.GetMetadata("replaced") == null ||
+                memory.GetMetadata("last") != null)
+                throw new Exception("Share removal must attempt every close and preserve aliases and replacement files.");
+            await server.AddShareAsync(share);
+            await Denied(() => files.ListDirectoryAsync(), NtStatus.BadNetworkName);
+            foreach (var old in new[] { broken, pending, replaced, last })
+                await Denied(() => old.DisposeAsync().AsTask(), NtStatus.BadNetworkName);
+            _ = await aliasHandle.ReadAsync(new byte[1], 0);
+            await aliasHandle.DisposeAsync();
+            if (memory.GetMetadata("pending") != null) throw new Exception("The final alias close must honor the pending delete.");
+            Console.WriteLine("PASS share removal drains after provider failure, preserves aliases and revokes old trees across re-registration");
+        }
+        finally { stop.Cancel(); await run; }
+    }
+
     private static async Task Denied(Func<Task> action, uint status)
     {
         try { await action(); } catch (SmbException e) when (e.NtStatus == status) { return; }
@@ -144,7 +193,7 @@ internal static class ProviderChecks
             }
             else if (mode == FileMode.CreateNew) throw new SmbException(NtStatus.ObjectNameCollision);
             if (mode == FileMode.Truncate) node.Data = [];
-            return new MemoryFile(node);
+            return new MemoryFile(node, () => FileClosed?.Invoke(path));
         }
         public void CreateDirectory(string path) => nodes.Add(path, new(++nextId, true));
         public void Delete(string path, bool directory) => nodes.Remove(path);
@@ -170,7 +219,8 @@ internal static class ProviderChecks
         {
             if (archive) LastArchivedPath = path;
         }
-        private sealed class MemoryFile(Node node) : ISmbFile
+        internal Action<string>? FileClosed { get; set; }
+        private sealed class MemoryFile(Node node, Action closed) : ISmbFile
         {
             public long Length => node.Data.Length;
             public ValueTask<int> ReadAsync(Memory<byte> buffer, long offset, CancellationToken cancellationToken)
@@ -189,7 +239,7 @@ internal static class ProviderChecks
             }
             public void SetLength(long length) => Array.Resize(ref node.Data, checked((int)length));
             public void Flush() { }
-            public void Dispose() { }
+            public void Dispose() => closed();
         }
     }
 }

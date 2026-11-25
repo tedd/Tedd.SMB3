@@ -81,7 +81,7 @@ public abstract class SmbDirectoryProvider : ISmbShareProvider
         return path;
     }
 
-    public SmbFileMetadata? GetMetadata(string path)
+    public virtual SmbFileMetadata? GetMetadata(string path)
     {
         string physical = Physical(path);
         if (!File.Exists(physical) && !Directory.Exists(physical))
@@ -120,7 +120,7 @@ public abstract class SmbDirectoryProvider : ISmbShareProvider
         else File.Move(Physical(source), Physical(destination), replace);
     }
 
-    public void SetMetadata(string path, SmbMetadataUpdate update)
+    public virtual void SetMetadata(string path, SmbMetadataUpdate update)
     {
         var times = new byte[FileBasicInformation.Size];
         DateTime?[] values = [update.CreationTimeUtc, update.LastAccessTimeUtc, update.LastWriteTimeUtc, update.ChangeTimeUtc];
@@ -131,7 +131,7 @@ public abstract class SmbDirectoryProvider : ISmbShareProvider
         if (update.Attributes is { } attributes)
             FileMetadata.SetAttributes(physical, (uint)attributes, Directory.Exists(physical));
     }
-    public void MarkChanged(string path, bool archive) => FileMetadata.Changed(Physical(path), archive);
+    public virtual void MarkChanged(string path, bool archive) => FileMetadata.Changed(Physical(path), archive);
 
     private sealed class DirectoryFile(FileStream stream) : ISmbFile
     {
