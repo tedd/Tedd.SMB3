@@ -1,0 +1,27 @@
+{
+  "sourceRevision": "dcab2a6",
+  "platform": "Linux x86-64, Ubuntu kernel 6.8.0-149-generic, rdma-core 50, .NET 10.0.15 Release",
+  "environment": "KVM guests with two virtual CPUs each, software RoCE (RXE) on virtio-net, tmpfs share",
+  "workload": "SMB 3.1.1 encrypted, compression disabled, two sessions. Writes include file create and close. Reads are cached. A separate read pass verifies every byte. Rates are decimal GB/s from individual runs.",
+  "measurements": [
+    {
+      "topology": "Two guests over a private QEMU socket link",
+      "mtu": 9000,
+      "files": 4,
+      "bytesPerFile": 67108864,
+      "writeGBps": 0.007,
+      "readGBps": 0.018
+    },
+    {
+      "topology": "Separate client and server processes using the same guest's RXE adapter",
+      "mtu": 1500,
+      "files": 8,
+      "bytesPerFile": 67108864,
+      "writeGBps": 0.102,
+      "readGBps": 0.209
+    }
+  ],
+  "stress": "Inter-guest transfers intermittently timed out. A six-file standard-MTU run stalled on a posted SEND with empty send and receive completion queues. Shortening the QP ACK timeout in an experimental build did not resolve the stall. On the same virtual link, upstream ib_send_bw -R -F -s 65536 -t 1 -r 8 -Q 1 -n 16000 stopped after 3132 messages and reported 120 seconds without progress.",
+  "profiling": "A separate four-file, 32 MiB/file run captured four seconds of server EventPipe sampled thread time. DotNetLab's live Linux capture failed on a multi-handle wait involving a named mutex. dotnet-trace collected the trace, then DotNetLab imported it.",
+  "traceSha256": "34f259209b84ad855de77a3adaa6d883a951fd8f245267805f77f9fa93a1bf07"
+}
