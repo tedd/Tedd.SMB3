@@ -72,7 +72,7 @@ internal static class ClientFileChecks
         const string name = "transfer.bin";
         string path = Path.Combine(export, name);
         var random = new Random(1783);
-        foreach (int size in new[] { 0, 1, chunk - 1, chunk, chunk + 1, 2 * chunk - 1, 2 * chunk, 2 * chunk + 1 })
+        foreach (int size in new[] { 0, 1, chunk - 1, chunk, chunk + 1, 2 * chunk - 1, 2 * chunk, 2 * chunk + 1, 16 * chunk - 1, 16 * chunk, 16 * chunk + 1 })
         {
             byte[] source = new byte[size + 2];
             random.NextBytes(source);
@@ -88,14 +88,25 @@ internal static class ClientFileChecks
             byte[] buffer = new byte[chunk + 5];
             Array.Fill(buffer, (byte)0xCA);
             int count = await handle.ReadAsync(buffer.AsMemory(1, chunk + 2), 0);
-            Check.Equal(Math.Min(size, chunk), count, $"bounded read {size}");
+            Check.Equal(Math.Min(size, chunk + 2), count, $"bounded read {size}");
             byte[] expectedBuffer = Enumerable.Repeat((byte)0xCA, buffer.Length).ToArray();
             expected.AsSpan(0, count).CopyTo(expectedBuffer.AsSpan(1));
             Check.Bytes(expectedBuffer, buffer, $"read slice {size}");
             Check.Equal(0, await handle.ReadAsync(buffer, size), $"EOF at {size}");
             Check.Equal(0, await handle.ReadAsync(buffer, 1L << 32), $"64-bit offset beyond {size}");
         }
-        Console.WriteLine("PASS reads and writes around 64 KiB and 128 KiB, buffer slices and EOF");
+        Console.WriteLine("PASS reads and writes around 64 KiB, 128 KiB and 1 MiB, buffer slices and EOF");
+        byte[] pattern = new byte[2 * SmbLimits.MaxFileIoSize];
+        random.NextBytes(pattern);
+        File.WriteAllBytes(path, pattern);
+        await using var shared = await client.OpenAsync(name);
+        async Task ReadAndVerify(int offset)
+        {
+            byte[] destination = new byte[SmbLimits.MaxFileIoSize];
+            Check.Equal(destination.Length, await shared.ReadAsync(destination, offset), "queued full-size file read");
+            Check.Bytes(pattern[offset..(offset + destination.Length)], destination, "queued reads retain independent contents");
+        }
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(i => ReadAndVerify(i % 2 * SmbLimits.MaxFileIoSize)));
     }
 
     private static async Task PositionalIoAsync(SmbClient client, string export)

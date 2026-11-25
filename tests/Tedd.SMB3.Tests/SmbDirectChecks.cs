@@ -4,14 +4,19 @@ using Tedd.SMB3;
 internal static class SmbDirectChecks
 {
     // The fake preserves RDMA SEND boundaries and fails immediately on a receive queue overrun.
-    private sealed class Queue(Channel<byte[]> incoming, Channel<byte[]> outgoing, int size) : IRdmaQueue
+    private sealed class Queue(Channel<byte[]> incoming, Channel<byte[]> outgoing, int size, int? advertisedLimit = null) : IRdmaQueue
     {
+        private bool firstSend = true;
         public int ReceiveDepth => 4;
         public Memory<byte> SendBuffer { get; } = new byte[size];
         public ValueTask SendAsync(int length, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            if (length > SendBuffer.Length || !outgoing.Writer.TryWrite(SendBuffer[..length].ToArray()))
+            var message = SendBuffer[..length].ToArray();
+            if (firstSend && advertisedLimit.HasValue)
+                Wire.WriteUInt32LittleEndian(message, length - 4, (uint)advertisedLimit.Value);
+            firstSend = false;
+            if (!outgoing.Writer.TryWrite(message))
                 throw new InvalidOperationException("RDMA work request exceeds the posted receive capacity.");
             return ValueTask.CompletedTask;
         }
@@ -144,8 +149,9 @@ internal static class SmbDirectChecks
             });
             var requests = Channel.CreateBounded<byte[]>(4);
             var replies = Channel.CreateBounded<byte[]>(4);
-            using var clientQueue = new Queue(replies, requests, 4096);
-            using var serverQueue = new Queue(requests, replies, 1024);
+            const int peerLimit = 131072;
+            using var clientQueue = new Queue(replies, requests, 4096, peerLimit);
+            using var serverQueue = new Queue(requests, replies, 1024, peerLimit);
             using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(ct);
             async Task Serve()
             {
@@ -172,6 +178,13 @@ internal static class SmbDirectChecks
                     await client.MoveAsync("original.bin", "renamed.bin", ct: ct);
                     await Check.StatusAsync(NtStatus.ObjectNameNotFound, () => client.ReadAllBytesAsync("original.bin", ct), "SMB error on RDMA");
                     Check.Bytes(data, await client.ReadAllBytesAsync("renamed.bin", ct), "protected file READ after SMB error");
+                    await using (var file = await client.OpenAsync("renamed.bin", ct: ct))
+                    {
+                        byte[] buffer = new byte[data.Length];
+                        int read = await file.ReadAsync(buffer, 0, ct);
+                        Check.Equal(peerLimit - 52 - 64 - 48, read, "bulk read fits negotiated SMBD limit including headers");
+                        Check.Bytes(data[..read], buffer[..read], "transport-limited read payload");
+                    }
                     using (var stored = store.OpenFile("renamed.bin", FileMode.Open, FileAccess.Read, FileShare.Read, writeThrough: false))
                     {
                         var actual = new byte[data.Length];

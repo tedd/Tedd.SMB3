@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Net;
 using System.Net.Sockets;
 
 namespace Tedd.SMB3;
@@ -14,14 +15,28 @@ internal interface ISmbTransport
 internal sealed class SmbTransport(NetworkStream stream) : ISmbTransport
 {
     private readonly byte[] receiveHeader = new byte[DirectTcpTransport.HeaderSize];
-    public async ValueTask<byte[]> ReceiveAsync(CancellationToken cancellationToken)
+
+    internal static SmbTransport Open(TcpClient tcp)
+    {
+        tcp.NoDelay = true;
+        if (OperatingSystem.IsWindows() && tcp.Client.RemoteEndPoint is IPEndPoint endpoint &&
+            IPAddress.IsLoopback(endpoint.Address.IsIPv4MappedToIPv6 ? endpoint.Address.MapToIPv4() : endpoint.Address))
+        {
+            int size = SmbLimits.MaxFileIoSize + 4096;
+            if (tcp.ReceiveBufferSize < size) tcp.ReceiveBufferSize = size;
+            if (tcp.SendBufferSize < size) tcp.SendBufferSize = size;
+        }
+        return new SmbTransport(tcp.GetStream());
+    }
+    public ValueTask<byte[]> ReceiveAsync(CancellationToken cancellationToken) => ReceiveAsync(cancellationToken, null);
+
+    internal async ValueTask<byte[]> ReceiveAsync(CancellationToken cancellationToken, TransferBuffer? reuse)
     {
         await stream.ReadExactlyAsync(receiveHeader, cancellationToken).ConfigureAwait(false);
         int length = (receiveHeader[1] << 16) | (receiveHeader[2] << 8) | receiveHeader[3];
         if (receiveHeader[0] != DirectTcpTransport.SessionMessage || length < 16 || length > SmbLimits.MaxFrameSize)
             throw new SmbException(NtStatus.InvalidParameter);
-        // The returned array has independent ownership and may outlive this exchange.
-        var packet = new byte[length];
+        var packet = TransferBuffer.Allocate(length, 0, reuse);
         await stream.ReadExactlyAsync(packet, cancellationToken).ConfigureAwait(false);
         return packet;
     }

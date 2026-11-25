@@ -42,7 +42,10 @@ xattrs; the backing filesystem and backups must preserve them. Explicit logical
 timestamp updates return an error when the filesystem cannot persist them.
 Other local programs do not maintain these logical timestamps. SMB share modes
 coordinate this server's handles; independent server instances need separate
-exports. Transfers use at most 64 KiB per read/write, with 32 credits, 32 commands
+exports. Large MTU peers can transfer up to 1 MiB per READ or WRITE, using one
+credit per 64 KiB. The client sizes each request to the peer's negotiated limit
+and available credits. Single-credit peers retain the 64 KiB limit.
+The server allows 32 credits, 32 commands
 per compound, 64 trees and 1,024 handles per connection, and 32 connections by
 default. Requests on each connection execute in order.
 
@@ -65,8 +68,8 @@ RDMA queue pair using Linux rdma-core or Windows Network Direct v2. Each connect
 send and receive buffers once. MS-SMBD negotiates message sizes and credits and
 fragments larger SMB messages across RDMA SENDs. File data travels in-band.
 One-sided RDMA READ/WRITE, RDMA crypto transforms, multichannel discovery, and
-iWARP port mapping are unsupported. The 64 KiB SMB file I/O limit also applies
-to this transport. Hardware interoperability and wire throughput are unverified.
+iWARP port mapping are unsupported. The negotiated SMB Direct message size
+also bounds file I/O. Hardware interoperability and wire throughput are unverified.
 
 On Linux, install the rdma-core userspace provider for the adapter. Building the
 native library requires a C compiler, Make, and the development packages for

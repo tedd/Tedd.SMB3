@@ -70,11 +70,13 @@ internal static class Wire
         return b;
     }
 
-    internal static byte[] Packet(ushort command, ulong message, ulong session, uint tree, ReadOnlySpan<byte> body)
+    internal static byte[] Packet(ushort command, ulong message, ulong session, uint tree, ReadOnlySpan<byte> body,
+        TransferBuffer? reuse = null, ReadOnlySpan<byte> data = default)
     {
-        var packet = new byte[checked(Smb3Header.Size + body.Length)];
+        var packet = TransferBuffer.Allocate(checked(Smb3Header.Size + body.Length + data.Length), Smb3Header.Size, reuse);
         WriteHeader(packet, command, message, session, tree);
         body.CopyTo(packet.AsSpan(Smb3Header.Size));
+        data.CopyTo(packet.AsSpan(Smb3Header.Size + body.Length));
         return packet;
     }
 

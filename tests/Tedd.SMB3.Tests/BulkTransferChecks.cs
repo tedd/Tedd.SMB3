@@ -49,7 +49,7 @@ internal static class BulkTransferChecks
 
         async Task ReadFiles(int worker, bool verify)
         {
-            byte[] buffer = new byte[65536];
+            byte[] buffer = new byte[blocks[worker].Length];
             for (int index = 0; index < files[worker].Count; index++)
             {
                 string name = files[worker][index];

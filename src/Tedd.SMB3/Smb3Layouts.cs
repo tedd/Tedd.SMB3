@@ -271,6 +271,8 @@ internal static class Smb3IoctlRequest
     internal const int FileIdOffset = 8;
     internal const int InputOffsetFieldOffset = 24;
     internal const int InputCountOffset = 28;
+    internal const int MaxInputResponseOffset = 32;
+    internal const int OutputCountOffset = 40;
     internal const int MaxOutputResponseOffset = 44;
 }
 

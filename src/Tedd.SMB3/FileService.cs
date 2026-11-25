@@ -35,6 +35,15 @@ internal sealed class OpenFile : IDisposable
 /// <remarks>The server's async file gate protects cross-connection sharing invariants.</remarks>
 internal sealed class FileService : IAsyncDisposable
 {
+    internal int MaxFileIoSize { get; set; } = SmbLimits.MaxTransferSize;
+    internal bool SupportsMultiCredit { get; set; }
+    private readonly TransferBuffer readBody = new();
+
+    private int GrantedFileIoSize(ReadOnlySpan<byte> request)
+    {
+        int charge = Math.Max(1, (int)Wire.ReadUInt16LittleEndian(request, Smb3Header.CreditChargeOffset));
+        return (int)Math.Min(MaxFileIoSize, (long)charge * SmbLimits.MaxTransferSize);
+    }
     private readonly SmbServer server;
     private readonly Dictionary<FileHandleId, OpenFile> handles = [];
     internal byte[]? RelatedId;
@@ -433,9 +442,9 @@ internal sealed class FileService : IAsyncDisposable
         int count = checked((int)Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3ReadRequest.LengthOffset));
         long offset = checked((long)Wire.ReadUInt64LittleEndian(request.Span, Smb3Header.Size + Smb3ReadRequest.OffsetFieldOffset));
         uint minimum = Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3ReadRequest.MinimumCountOffset);
-        if (count > SmbLimits.MaxTransferSize || minimum > count || Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3ReadRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(request.Span, Smb3Header.Size + Smb3ReadRequest.ReadChannelInfoLengthOffset) != 0)
+        if (count > GrantedFileIoSize(request.Span) || minimum > count || Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3ReadRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(request.Span, Smb3Header.Size + Smb3ReadRequest.ReadChannelInfoLengthOffset) != 0)
             throw new SmbException(NtStatus.InvalidParameter);
-        var response = new byte[Smb3ReadResponse.FixedSize + count];
+        var response = TransferBuffer.Allocate(Smb3ReadResponse.FixedSize + count, Smb3ReadResponse.FixedSize, readBody);
         int used;
         if (handle.Pipe)
         {
@@ -471,7 +480,7 @@ internal sealed class FileService : IAsyncDisposable
         int count = checked((int)Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.LengthOffset));
         int dataOffset = Wire.ReadUInt16LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.DataOffsetFieldOffset);
         long offset = checked((long)Wire.ReadUInt64LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.OffsetFieldOffset));
-        if (count > SmbLimits.MaxTransferSize || dataOffset < Smb3Header.Size + Smb3WriteRequest.FixedSize || Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.WriteChannelInfoLengthOffset) != 0)
+        if (count > GrantedFileIoSize(request.Span) || dataOffset < Smb3Header.Size + Smb3WriteRequest.FixedSize || Wire.ReadUInt32LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.ChannelOffset) != 0 || Wire.ReadUInt16LittleEndian(request.Span, Smb3Header.Size + Smb3WriteRequest.WriteChannelInfoLengthOffset) != 0)
             throw new SmbException(NtStatus.InvalidParameter);
         _ = Wire.Slice(request.Span, dataOffset, count);
         var data = request.Slice(dataOffset, count);
@@ -506,6 +515,13 @@ internal sealed class FileService : IAsyncDisposable
     private byte[] Ioctl(ReadOnlySpan<byte> r, uint tree)
     {
         ValidateStructure(r, Smb3IoctlRequest.StructureSize, Smb3Header.Size + Smb3IoctlRequest.FixedSize);
+        if (SupportsMultiCredit)
+        {
+            var body = r[Smb3Header.Size..];
+            long input = (long)Wire.ReadUInt32LittleEndian(body, Smb3IoctlRequest.InputCountOffset) + Wire.ReadUInt32LittleEndian(body, Smb3IoctlRequest.OutputCountOffset);
+            long output = (long)Wire.ReadUInt32LittleEndian(body, Smb3IoctlRequest.MaxInputResponseOffset) + Wire.ReadUInt32LittleEndian(body, Smb3IoctlRequest.MaxOutputResponseOffset);
+            if (Math.Max(input, output) > SmbLimits.MaxTransferSize) throw new SmbException(NtStatus.InvalidParameter);
+        }
         uint code = Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3IoctlRequest.CtlCodeOffset);
         if (code == FileSystemControlCode.ValidateNegotiateInfo)
             throw new SmbException(NtStatus.NotFound); // FSCTL_VALIDATE_NEGOTIATE_INFO is obsolete for 3.1.1.
@@ -533,6 +549,8 @@ internal sealed class FileService : IAsyncDisposable
     {
         // Keep the enumerator and next unreturned entry on the handle across pages.
         ValidateStructure(r, Smb3QueryDirectoryRequest.StructureSize, Smb3Header.Size + Smb3QueryDirectoryRequest.FixedSize);
+        if (SupportsMultiCredit && Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3QueryDirectoryRequest.OutputBufferLengthOffset) > SmbLimits.MaxTransferSize)
+            throw new SmbException(NtStatus.InvalidParameter);
         var h = FindHandle(r, Smb3Header.Size + Smb3QueryDirectoryRequest.FileIdOffset, tree);
         RequireAccess(h, FileAccessMask.ReadData);
         if (!h.Directory)

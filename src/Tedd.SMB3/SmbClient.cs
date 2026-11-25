@@ -43,6 +43,8 @@ public sealed class SmbClient : IAsyncDisposable
     private ulong message;
     private ulong session;
     private int credits = 1;
+    private int maxRead, maxWrite;
+    private readonly TransferBuffer sendPacket = new(), sendCiphertext = new(), receiveWire = new(), receivePlaintext = new();
     private uint tree;
     private bool encrypted;
     private bool disposed;
@@ -87,14 +89,13 @@ public sealed class SmbClient : IAsyncDisposable
             var tcp = new TcpClient();
             channel = tcp;
             await tcp.ConnectAsync(host, options.Port, ct).ConfigureAwait(false);
-            tcp.NoDelay = true;
-            transport = new SmbTransport(tcp.GetStream());
+            transport = SmbTransport.Open(tcp);
         }
         var body = new byte[Wire.Align(Smb3NegotiateRequest.FixedSize + sizeof(ushort))];
         Wire.WriteUInt16LittleEndian(body, 0, Smb3NegotiateRequest.StructureSize);
         Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.DialectCountOffset, 1);
         Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.SecurityModeOffset, Smb3SecurityMode.SigningEnabledAndRequired);
-        Wire.WriteUInt32LittleEndian(body, Smb3NegotiateRequest.CapabilitiesOffset, Smb3GlobalCapabilities.Encryption);
+        Wire.WriteUInt32LittleEndian(body, Smb3NegotiateRequest.CapabilitiesOffset, Smb3GlobalCapabilities.Encryption | Smb3GlobalCapabilities.LargeMtu);
         Guid.NewGuid().TryWriteBytes(body.AsSpan(Smb3NegotiateRequest.ClientGuidOffset, 16));
         Wire.WriteUInt32LittleEndian(body, Smb3NegotiateRequest.NegotiateContextOffsetFieldOffset, (uint)(Smb3Header.Size + body.Length));
         Wire.WriteUInt16LittleEndian(body, Smb3NegotiateRequest.NegotiateContextCountOffset, Negotiation.ContextCountWithSigning + (options.EnableCompression ? 1 : 0));
@@ -107,6 +108,12 @@ public sealed class SmbClient : IAsyncDisposable
         var algorithms = Negotiation.ValidateContexts(response, checked((int)Wire.ReadUInt32LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.NegotiateContextOffsetFieldOffset)), Wire.ReadUInt16LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.NegotiateContextCountOffset), true);
         if (algorithms.Compression && !options.EnableCompression) throw new SmbException(NtStatus.InvalidParameter);
         compression = algorithms.Compression;
+        int limit = (Wire.ReadUInt32LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.CapabilitiesOffset) & Smb3GlobalCapabilities.LargeMtu) != 0
+            ? SmbLimits.MaxFileIoSize : SmbLimits.MaxTransferSize;
+        maxRead = (int)Math.Min((uint)limit, Wire.ReadUInt32LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.MaxReadSizeOffset));
+        if (transport is SmbDirectTransport direct) limit = Math.Min(limit, direct.MaxFileIoSize);
+        maxWrite = (int)Math.Min((uint)limit, Wire.ReadUInt32LittleEndian(response, Smb3Header.Size + Smb3NegotiateResponse.MaxWriteSizeOffset));
+        if (maxRead == 0 || maxWrite == 0) throw new SmbException(NtStatus.InvalidParameter);
         byte[] hash = Negotiation.Hash(Negotiation.Hash(new byte[Smb3Cryptography.PreauthHashSize], negotiate), response);
         var ntlm = Ntlm.Negotiate();
         var setup = CreateRequest(Smb3Command.SessionSetup, CreateSessionSetupBody(ntlm));
@@ -159,12 +166,15 @@ public sealed class SmbClient : IAsyncDisposable
         return Wire.Join(b, token);
     }
 
-    private byte[] CreateRequest(ushort cmd, byte[] body)
+    private byte[] CreateRequest(ushort cmd, byte[] body, int charge = 1, ReadOnlySpan<byte> data = default)
     {
-        if (credits < 1)
+        if (credits < charge)
             throw new SmbException(NtStatus.InvalidParameter);
-        credits--;
-        return Wire.Packet(cmd, message++, session, tree, body);
+        var packet = Wire.Packet(cmd, message, session, tree, body, sendPacket, data);
+        Wire.WriteUInt16LittleEndian(packet, Smb3Header.CreditChargeOffset, charge);
+        credits -= charge;
+        message = checked(message + (uint)charge);
+        return packet;
     }
 
     private async Task<byte[]> ExchangeUnauthenticatedAsync(byte[] packet, CancellationToken ct)
@@ -187,24 +197,34 @@ public sealed class SmbClient : IAsyncDisposable
 
     private async Task<byte[]> ExchangeAsync(ushort cmd, byte[] body, CancellationToken ct)
     {
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await ExchangeLockedAsync(cmd, body, 1, ct).ConfigureAwait(false); }
+        finally { gate.Release(); }
+    }
+
+    private async Task<byte[]> ExchangeLockedAsync(ushort cmd, byte[] body, int charge, CancellationToken ct, ReadOnlyMemory<byte> data = default)
+    {
         ObjectDisposedException.ThrowIf(disposed, this);
         if (failed)
             throw new IOException("SMB connection is no longer usable.");
-        await gate.WaitAsync(ct).ConfigureAwait(false);
         bool responseTrusted = false;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(options.RequestTimeout);
-            var p = CreateRequest(cmd, body);
+            var p = CreateRequest(cmd, body, charge, data.Span);
             if (!encrypted)
                 crypto!.Sign(p);
             byte[] outgoing = compression ? SmbCompression.Compress(p) : p;
-            await transport.SendAsync(encrypted ? crypto!.Encrypt(outgoing, session) : outgoing, timeout.Token).ConfigureAwait(false);
-            var r = await transport.ReceiveAsync(timeout.Token).ConfigureAwait(false);
+            await transport.SendAsync(encrypted ? crypto!.Encrypt(outgoing, session, sendCiphertext) : outgoing, timeout.Token).ConfigureAwait(false);
+            // Only the file handlers consume their replies before releasing the gate.
+            bool fileIo = cmd is Smb3Command.Read or Smb3Command.Write;
+            var r = fileIo && transport is SmbTransport tcp
+                ? await tcp.ReceiveAsync(timeout.Token, receiveWire).ConfigureAwait(false)
+                : await transport.ReceiveAsync(timeout.Token).ConfigureAwait(false);
             bool wasEncrypted = r[Smb3Header.ProtocolIdOffset] == Smb3TransformHeader.ProtocolPrefix;
             if (wasEncrypted)
-                r = crypto!.Decrypt(r, session);
+                r = crypto!.Decrypt(r, session, fileIo ? receivePlaintext : null);
             else if (encrypted)
                 throw new SmbException(NtStatus.AccessDenied);
             if (r[0] == SmbCompression.Prefix)
@@ -229,10 +249,6 @@ public sealed class SmbClient : IAsyncDisposable
             if (transport is SmbDirectTransport direct) direct.Abort();
             else channel?.Dispose();
             throw;
-        }
-        finally
-        {
-            gate.Release();
         }
     }
 
@@ -269,12 +285,22 @@ public sealed class SmbClient : IAsyncDisposable
         return new SmbFile(this, r[(Smb3Header.Size + Smb3CreateResponse.FileIdOffset)..(Smb3Header.Size + Smb3CreateResponse.FileIdOffset + Smb3FileId.Size)], checked((long)Wire.ReadUInt64LittleEndian(r, Smb3Header.Size + Smb3CreateResponse.EndOfFileOffset)));
     }
 
+    // Size each exchange under the channel gate. A previous reply may grant fewer credits.
+    private int TransferLength(int requested, int maximum) =>
+        Math.Min(requested, Math.Min(maximum, Math.Min(credits, SmbLimits.MaxCredits) * SmbLimits.MaxTransferSize));
+
     internal async Task<int> ReadAsync(byte[] id, Memory<byte> buffer, long offset, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
-        int n = Math.Min(buffer.Length, SmbLimits.MaxTransferSize);
-        if (n == 0)
-            return 0;
+        if (buffer.IsEmpty) return 0;
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await ReadLockedAsync(id, buffer, offset, ct).ConfigureAwait(false); }
+        finally { gate.Release(); }
+    }
+
+    private async Task<int> ReadLockedAsync(byte[] id, Memory<byte> buffer, long offset, CancellationToken ct)
+    {
+        int n = TransferLength(buffer.Length, maxRead);
         var b = new byte[Smb3ReadRequest.StructureSize];
         Wire.WriteUInt16LittleEndian(b, 0, Smb3ReadRequest.StructureSize);
         Wire.WriteUInt32LittleEndian(b, Smb3ReadRequest.LengthOffset, (uint)n);
@@ -282,7 +308,7 @@ public sealed class SmbClient : IAsyncDisposable
         id.CopyTo(b, Smb3ReadRequest.FileIdOffset);
         try
         {
-            var r = await ExchangeAsync(Smb3Command.Read, b, ct).ConfigureAwait(false);
+            var r = await ExchangeLockedAsync(Smb3Command.Read, b, SmbLimits.FileCreditCharge(n), ct).ConfigureAwait(false);
             int length = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3ReadResponse.DataLengthOffset));
             if (length > n)
                 throw new SmbException(NtStatus.InvalidParameter);
@@ -300,21 +326,31 @@ public sealed class SmbClient : IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         while (data.Length > 0)
         {
-            int n = Math.Min(data.Length, SmbLimits.MaxTransferSize);
-            var b = new byte[Smb3WriteRequest.FixedSize + n];
-            Wire.WriteUInt16LittleEndian(b, 0, Smb3WriteRequest.StructureSize);
-            Wire.WriteUInt16LittleEndian(b, Smb3WriteRequest.DataOffsetFieldOffset, Smb3Header.Size + Smb3WriteRequest.FixedSize);
-            Wire.WriteUInt32LittleEndian(b, Smb3WriteRequest.LengthOffset, (uint)n);
-            Wire.WriteUInt64LittleEndian(b, Smb3WriteRequest.OffsetFieldOffset, checked((ulong)offset));
-            id.CopyTo(b, Smb3WriteRequest.FileIdOffset);
-            data.Span[..n].CopyTo(b.AsSpan(Smb3WriteRequest.FixedSize));
-            var r = await ExchangeAsync(Smb3Command.Write, b, ct).ConfigureAwait(false);
-            int written = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3WriteResponse.CountOffset));
-            if (written < 1 || written > n)
-                throw new IOException("Invalid SMB write count.");
+            await gate.WaitAsync(ct).ConfigureAwait(false);
+            int written;
+            try
+            {
+                int n = TransferLength(data.Length, maxWrite);
+                written = await WriteLockedAsync(id, data[..n], offset, ct).ConfigureAwait(false);
+            }
+            finally { gate.Release(); }
             offset = checked(offset + written);
             data = data[written..];
         }
+    }
+
+    private async Task<int> WriteLockedAsync(byte[] id, ReadOnlyMemory<byte> data, long offset, CancellationToken ct)
+    {
+        var b = new byte[Smb3WriteRequest.FixedSize];
+        Wire.WriteUInt16LittleEndian(b, 0, Smb3WriteRequest.StructureSize);
+        Wire.WriteUInt16LittleEndian(b, Smb3WriteRequest.DataOffsetFieldOffset, Smb3Header.Size + Smb3WriteRequest.FixedSize);
+        Wire.WriteUInt32LittleEndian(b, Smb3WriteRequest.LengthOffset, (uint)data.Length);
+        Wire.WriteUInt64LittleEndian(b, Smb3WriteRequest.OffsetFieldOffset, (ulong)offset);
+        id.CopyTo(b, Smb3WriteRequest.FileIdOffset);
+        var r = await ExchangeLockedAsync(Smb3Command.Write, b, SmbLimits.FileCreditCharge(data.Length), ct, data).ConfigureAwait(false);
+        int written = checked((int)Wire.ReadUInt32LittleEndian(r, Smb3Header.Size + Smb3WriteResponse.CountOffset));
+        if (written < 1 || written > data.Length) throw new IOException("Invalid SMB write count.");
+        return written;
     }
 
     internal async Task CloseAsync(byte[] id, CancellationToken ct)
@@ -371,12 +407,13 @@ public sealed class SmbClient : IAsyncDisposable
         if (file.Length > int.MaxValue)
             throw new IOException("File exceeds byte-array capacity; use OpenAsync.");
         using var result = new MemoryStream((int)file.Length);
-        byte[] buffer = ArrayPool<byte>.Shared.Rent(SmbLimits.MaxTransferSize);
+        int chunk = (int)Math.Min(maxRead, Math.Max(SmbLimits.MaxTransferSize, file.Length));
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(chunk);
         try
         {
             int count;
             // Continue to EOF even if the file has grown since CREATE returned its size.
-            while ((count = await file.ReadAsync(buffer.AsMemory(0, SmbLimits.MaxTransferSize), result.Length, ct).ConfigureAwait(false)) > 0)
+            while ((count = await file.ReadAsync(buffer.AsMemory(0, chunk), result.Length, ct).ConfigureAwait(false)) > 0)
             {
                 if (result.Length + count > int.MaxValue)
                     throw new IOException("File exceeds byte-array capacity.");

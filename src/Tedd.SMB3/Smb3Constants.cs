@@ -48,6 +48,7 @@ internal static class Smb3SecurityMode
 
 internal static class Smb3GlobalCapabilities
 {
+    internal const uint LargeMtu = 0x00000004;
     internal const uint Encryption = 0x00000040;
 }
 
@@ -262,6 +263,8 @@ internal static class SmbLimits
 {
     internal const int DefaultPort = 445;
     internal const int MaxTransferSize = 65536;
+    internal const int MaxFileIoSize = 1024 * 1024;
+    internal static int FileCreditCharge(int length) => length == 0 ? 1 : 1 + (length - 1) / MaxTransferSize;
     internal const int MaxFrameSize = 4 * 1024 * 1024;
     internal const int MaxCredits = 32;
     internal const int MaxCompoundCommands = 32;

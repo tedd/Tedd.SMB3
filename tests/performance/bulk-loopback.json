@@ -1,0 +1,34 @@
+{
+  "baselineRevision": "1a3d0b045dc0080d4976f16305f0e48d1df1e005",
+  "baselineLibrarySha256": "cd1d5b5474b97ddb1334f4e9c5a2c642d7e21dd49499f854be8d9f5254a73352",
+  "candidateLibrarySha256": "4197a94c1dd1d43773f163c41895bba50f0c5908fe3c444b023637640d51d18b",
+  "runtime": ".NET 10.0.15, x64 Release",
+  "workload": "Encrypted SMB 3.1.1, compression disabled, separate client and server processes. Two concurrent sessions each write and then read four 64 MiB files. Each timed phase transfers 536870912 payload bytes and includes opens and closes. The two builds use the same driver with 1 MiB application buffers. A separate read pass verifies every byte. Reads are cached and writes do not request durable flush.",
+  "driverArguments": "bulk <tcp|rdma> <host> <port> files 2 4 64",
+  "method": "Six pairs per platform, fresh processes per run, three pairs with each build first. Sample columns contain decimal GB/s rounded by the driver. Medians are calculated separately for each build and direction.",
+  "columns": ["firstBuild", "baselineWrite", "baselineRead", "candidateWrite", "candidateRead"],
+  "windows": {
+    "environment": "Windows x64 build 26200, IPv4 TCP loopback, NTFS share",
+    "samples": [
+      ["final",0.328,0.364,0.398,0.465],
+      ["base",0.34,0.384,0.456,0.511],
+      ["base",0.356,0.38,0.518,0.552],
+      ["final",0.35,0.402,0.49,0.567],
+      ["final",0.356,0.386,0.522,0.619],
+      ["base",0.347,0.385,0.566,0.572]
+    ],
+    "medians": { "baselineWrite": 0.3485, "baselineRead": 0.3845, "candidateWrite": 0.5040, "candidateRead": 0.5595 }
+  },
+  "linux": {
+    "environment": "Ubuntu 6.8.0-149-generic, rdma-core 50, 2-vCPU KVM guest, tmpfs share. Client and server use the same RXE adapter on virtio-net with MTU 1500. TCP fallback disabled.",
+    "samples": [
+      ["final",0.12,0.175,0.108,0.286],
+      ["base",0.107,0.152,0.127,0.287],
+      ["base",0.115,0.16,0.143,0.237],
+      ["final",0.096,0.222,0.141,0.291],
+      ["final",0.093,0.214,0.15,0.291],
+      ["base",0.096,0.172,0.13,0.293]
+    ],
+    "medians": { "baselineWrite": 0.1015, "baselineRead": 0.1735, "candidateWrite": 0.1355, "candidateRead": 0.2890 }
+  }
+}

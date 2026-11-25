@@ -250,9 +250,9 @@ internal sealed class SessionCrypto : IDisposable
             throw new SmbException(NtStatus.AccessDenied);
     }
 
-    internal byte[] Encrypt(byte[] packet, ulong session)
+    internal byte[] Encrypt(byte[] packet, ulong session, TransferBuffer? reuse = null)
     {
-        var b = new byte[Smb3TransformHeader.Size + packet.Length];
+        var b = TransferBuffer.Allocate(Smb3TransformHeader.Size + packet.Length, Smb3TransformHeader.Size, reuse);
         Wire.WriteUInt32LittleEndian(b, Smb3TransformHeader.ProtocolIdOffset, Smb3TransformHeader.ProtocolId);
         int prefix = (cipher == Smb3Cipher.Aes128Gcm ? Smb3Cryptography.GcmNonceSize : Smb3Cryptography.CcmNonceSize) - Smb3Cryptography.NonceCounterSize;
         noncePrefix.AsSpan(0, prefix).CopyTo(b.AsSpan(Smb3TransformHeader.NonceOffset));
@@ -276,11 +276,11 @@ internal sealed class SessionCrypto : IDisposable
         return b;
     }
 
-    internal byte[] Decrypt(byte[] packet, ulong session)
+    internal byte[] Decrypt(byte[] packet, ulong session, TransferBuffer? reuse = null)
     {
         if (packet.Length < Smb3TransformHeader.Size || Wire.ReadUInt32LittleEndian(packet, Smb3TransformHeader.ProtocolIdOffset) != Smb3TransformHeader.ProtocolId || Wire.ReadUInt64LittleEndian(packet, Smb3TransformHeader.SessionIdOffset) != session || Wire.ReadUInt32LittleEndian(packet, Smb3TransformHeader.OriginalMessageSizeOffset) != packet.Length - Smb3TransformHeader.Size || Wire.ReadUInt16LittleEndian(packet, Smb3TransformHeader.ReservedOffset) != 0 || Wire.ReadUInt16LittleEndian(packet, Smb3TransformHeader.FlagsOffset) != Smb3TransformHeader.Encrypted)
             throw new SmbException(NtStatus.AccessDenied);
-        var result = new byte[packet.Length - Smb3TransformHeader.Size];
+        var result = TransferBuffer.Allocate(packet.Length - Smb3TransformHeader.Size, 0, reuse);
         if (cipher == Smb3Cipher.Aes128Gcm)
         {
             using var aes = new AesGcm(incoming, Smb3TransformHeader.SignatureSize);

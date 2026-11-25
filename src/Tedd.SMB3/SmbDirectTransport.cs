@@ -24,6 +24,8 @@ internal sealed class SmbDirectTransport : ISmbTransport, IAsyncDisposable
     private Span<byte> Outgoing => queue.SendBuffer.Span;
     private readonly SmbDirectReassembly fragments = new();
     private int sendSize, receiveSize, sendLimit, sendCredits, receiveCredits, requested;
+    // Leave room for the largest inline file request and its encryption transform.
+    internal int MaxFileIoSize => sendLimit - Smb3TransformHeader.Size - Smb3Header.Size - Smb3WriteRequest.FixedSize;
     private readonly Channel<byte[]> packets = Channel.CreateBounded<byte[]>(1);
     private readonly SemaphoreSlim sender = new(1);
     private readonly object credits = new();
