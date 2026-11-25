@@ -58,18 +58,30 @@ The script places generated files, caches and test fixtures in the designated
 workspace. Library and host outputs are under `artifacts\bin` there. It does not
 install a service or change system SMB policies.
 
-## SMB Direct over RoCE (Windows x64, experimental)
+## SMB Direct over RoCE (Linux and Windows x64, experimental)
 
 The client and server can carry signed or encrypted SMB messages over a reliable
-RDMA queue pair using Windows Network Direct v2. Each connection registers its
+RDMA queue pair using Linux rdma-core or Windows Network Direct v2. Each connection registers its
 send and receive buffers once. MS-SMBD negotiates message sizes and credits and
 fragments larger SMB messages across RDMA SENDs. File data travels in-band.
 One-sided RDMA READ/WRITE, RDMA crypto transforms, multichannel discovery, and
 iWARP port mapping are unsupported. The 64 KiB SMB file I/O limit also applies
 to this transport. Hardware interoperability and wire throughput are unverified.
 
-Install a RoCE adapter and its user-mode Network Direct v2 provider on each
-endpoint. Build the optional native DLL with PowerShell 7, the Visual Studio C++
+On Linux, install the rdma-core userspace provider for the adapter. Building the
+native library requires a C compiler, Make, and the development packages for
+`librdmacm` and `libibverbs` (`librdmacm-dev` and `libibverbs-dev` on Ubuntu).
+From the repository root, run the following command and deploy
+`src/native/linux-rdma/bin/libTedd.SMB3.LinuxRdma.so` beside the managed application. The process needs access
+to the RDMA device and sufficient locked memory for its registered buffers
+(640 KiB per connection, plus provider overhead).
+
+```sh
+make -C src/native/linux-rdma test
+```
+
+On Windows x64, install the adapter's user-mode Network Direct v2 provider.
+Build the optional native DLL with PowerShell 7, the Visual Studio C++
 desktop workload, and CMake 3.24 or later.
 
 ```powershell
@@ -77,7 +89,9 @@ desktop workload, and CMake 3.24 or later.
 ```
 
 The build copies `Tedd.SMB3.NetworkDirect.dll` beside the library, host, and
-test executable. Deploy that DLL beside the managed application. Set
+test executable. Deploy that DLL beside the managed application.
+
+On both platforms, set
 `SmbClientOptions.UseSmbDirect` and `SmbServerOptions.UseSmbDirect` to `true`,
 or pass `--smb-direct` to the server host. Bind to the adapter's IP address. Both
 peers must use the same RDMA port (default 445). Selecting RDMA requires the
@@ -87,7 +101,9 @@ The native-enabled build runs Windows completion and registered-buffer tests
 using real event handles and a simulated provider. On Windows or Linux, run
 `dotnet Tedd.SMB3.Tests.dll smb-direct` from the test output directory to exercise
 negotiation, credits, keepalives, cancellation, and authenticated file transfers
-over simulated queues.
+over simulated queues. On a Linux RoCE interface that supports self-connections,
+`dotnet Tedd.SMB3.Tests.dll linux-rdma <adapter-ip>` exercises a native queue
+pair in both directions, including accept cancellation and peer disconnect.
 
 To measure aggregate encrypted file throughput, use a dedicated writable test
 share and set `TEDD_SMB_USER` and `TEDD_SMB_PASSWORD` on the test client. This

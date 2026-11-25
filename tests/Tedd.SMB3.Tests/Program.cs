@@ -4,6 +4,7 @@ using System.Text;
 using Tedd.SMB3;
 
 if (args is ["bulk", ..]) { await BulkTransferChecks.RunAsync(args); return; }
+if (args is ["linux-rdma", var address]) { await LinuxRdmaChecks.RunAsync(address); return; }
 if (args is ["smb-direct"]) { await SmbDirectChecks.RunAsync(); return; }
 
 // Performance mode executes no file, network, or account mutations.

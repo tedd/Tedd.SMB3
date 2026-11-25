@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 namespace Tedd.SMB3;
 
 /// <summary>Reliable connected RDMA SEND/RECEIVE using Windows Network Direct v2.</summary>
-internal sealed class WindowsRdmaQueue(WindowsRdmaQueue.ConnectionHandle handle, byte[] slots) : IRdmaQueue
+internal sealed class WindowsRdmaQueue(WindowsRdmaQueue.ConnectionHandle handle, byte[] slots) : IAcceptedRdmaQueue
 {
     // Matches the registered slots preposted by the native provider.
     private const int Capacity = 65536, Depth = 8;
@@ -24,8 +24,10 @@ internal sealed class WindowsRdmaQueue(WindowsRdmaQueue.ConnectionHandle handle,
         }
     }
 
-    internal sealed class ListenerHandle() : SafeHandleZeroOrMinusOneIsInvalid(true)
+    internal sealed class ListenerHandle() : SafeHandleZeroOrMinusOneIsInvalid(true), IRdmaListener
     {
+        public async Task<IAcceptedRdmaQueue> AcceptAsync(CancellationToken ct) =>
+            await WindowsRdmaQueue.AcceptAsync(this, ct).ConfigureAwait(false);
         protected override bool ReleaseHandle() { smbd_stop(handle); return true; }
     }
 
@@ -88,7 +90,7 @@ internal sealed class WindowsRdmaQueue(WindowsRdmaQueue.ConnectionHandle handle,
     internal static Task<WindowsRdmaQueue> AcceptAsync(ListenerHandle listener, CancellationToken ct) =>
         OpenAsync((IntPtr p, int n, SafeWaitHandle cancel, out ConnectionHandle c) => smbd_accept(listener, p, n, cancel, out c), ct);
 
-    internal Task FinishAcceptAsync(CancellationToken ct) => Task.Run(() => Check(smbd_finish_accept(handle, ct.WaitHandle.SafeWaitHandle), ct), ct);
+    public Task FinishAcceptAsync(CancellationToken ct) => Task.Run(() => Check(smbd_finish_accept(handle, ct.WaitHandle.SafeWaitHandle), ct), ct);
 
     internal static async Task<IRdmaQueue> ConnectAsync(string host, int port, CancellationToken ct)
     {

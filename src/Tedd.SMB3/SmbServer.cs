@@ -17,7 +17,7 @@ public sealed record SmbServerOptions
     public ISmbAuthenticationProvider? AuthenticationProvider { get; init; }
     public IPAddress ListenAddress { get; init; } = IPAddress.Loopback;
     public int Port { get; init; } = SmbLimits.DefaultPort;
-    /// <summary>Listen on a Windows x64 Network Direct v2 (RoCE) adapter for in-band SMB messages.</summary>
+    /// <summary>Listen on a RoCE adapter using the platform's native SMB Direct provider.</summary>
     public bool UseSmbDirect { get; init; }
     public bool Writable { get; init; }
     public bool RequireEncryption { get; init; } = true;
@@ -88,7 +88,7 @@ public sealed class SmbServer : IAsyncDisposable
         started = true;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, cancellationToken);
         using var rdmaListener = Options.UseSmbDirect
-            ? WindowsRdmaQueue.Listen(new(Options.ListenAddress, Options.Port), Options.MaxConnections, out rdmaEndPoint)
+            ? RdmaProvider.Listen(new(Options.ListenAddress, Options.Port), Options.MaxConnections, out rdmaEndPoint)
             : null;
         listener?.Start();
         Options.Log?.Invoke($"Listening on {LocalEndPoint}; shares {string.Join(", ", ShareNames)}; SMB 3.1.1; encryption required={Options.RequireEncryption}.");
@@ -97,7 +97,7 @@ public sealed class SmbServer : IAsyncDisposable
             while (!linked.IsCancellationRequested)
             {
                 IDisposable client = rdmaListener != null
-                    ? await WindowsRdmaQueue.AcceptAsync(rdmaListener, linked.Token).ConfigureAwait(false)
+                    ? await rdmaListener.AcceptAsync(linked.Token).ConfigureAwait(false)
                     : await listener!.AcceptTcpClientAsync(linked.Token).ConfigureAwait(false);
                 if (workers.Count >= Options.MaxConnections)
                 {
@@ -133,7 +133,7 @@ public sealed class SmbServer : IAsyncDisposable
             try
             {
                 ISmbTransport transport;
-                if (client is WindowsRdmaQueue queue)
+                if (client is IAcceptedRdmaQueue queue)
                 {
                     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     deadline.CancelAfter(TimeSpan.FromSeconds(5));

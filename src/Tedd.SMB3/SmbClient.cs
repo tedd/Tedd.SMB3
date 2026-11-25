@@ -12,9 +12,9 @@ public sealed record SmbClientOptions
     public required string Password { get; init; }
     public string Domain { get; init; } = "WORKGROUP";
     public int Port { get; init; } = SmbLimits.DefaultPort;
-    /// <summary>Connect over Windows x64 Network Direct v2 (RoCE), carrying SMB messages in-band.</summary>
+    /// <summary>Connect over RoCE using the platform's native SMB Direct provider.</summary>
     public bool UseSmbDirect { get; init; }
-    internal Func<string, int, CancellationToken, Task<IRdmaQueue>> OpenRdmaQueue { get; init; } = WindowsRdmaQueue.ConnectAsync;
+    internal Func<string, int, CancellationToken, Task<IRdmaQueue>> OpenRdmaQueue { get; init; } = RdmaProvider.ConnectAsync;
     /// <summary>Requests encryption; a peer may additionally require it at session or share level.</summary>
     public bool Encrypt { get; init; } = true;
     public bool EnableCompression { get; init; } = true;
